@@ -1,2 +1,2 @@
 # code_snippets
-Snippets of example codes for Data science projects
+Snippets of example codes for data science projects
