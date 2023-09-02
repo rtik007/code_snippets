@@ -1,0 +1,37 @@
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+# Create Spark session
+spark = SparkSession.builder.appName("sampling_task").getOrCreate()
+
+# Assuming df is your dataframe
+# Calculate fractions for each date and label
+label_fraction = (df.groupBy("date", "label")
+                  .agg(F.count("label").alias("count_per_label"))
+                  .groupBy("date")
+                  .pivot("label")
+                  .sum("count_per_label")
+                  .withColumn("total", F.col("0") + F.col("1"))
+                  .withColumn("fraction_0", F.col("0") / F.col("total"))
+                  .withColumn("fraction_1", F.col("1") / F.col("total")))
+
+# Calculate total number of samples required (1% of entire dataset)
+total_samples_required = df.count() * 0.01
+
+# Calculate total samples required for each label
+total_label_0 = df.filter(df["label"] == 0).count()
+total_label_1 = df.filter(df["label"] == 1).count()
+
+samples_0_required = (total_label_0 / (total_label_0 + total_label_1)) * total_samples_required
+samples_1_required = (total_label_1 / (total_label_0 + total_label_1)) * total_samples_required
+
+# Sample data for each date
+samples = (df.join(label_fraction, "date")
+           .sampleBy("label", fractions={0: samples_0_required / total_label_0,
+                                         1: samples_1_required / total_label_1}))
+
+# Ensure the total sample size is close to the total_samples_required 
+assert abs(samples.count() - total_samples_required) <= 2, "Sampled count is not close to the required count"
+
+# Show the result
+samples.show()
