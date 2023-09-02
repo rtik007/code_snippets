@@ -1,6 +1,7 @@
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
+from functools import reduce
 
 # Initialize SparkSession
 spark = SparkSession.builder \
@@ -31,7 +32,8 @@ for feature in features:
 
 # Derive a combined 'label' column
 outlier_cols = [f"{feature}_outlier" for feature in features]
-df = df.withColumn("label", F.when(F.sum(*outlier_cols) > 0, 1).otherwise(0))
+sum_of_outliers = reduce(lambda x, y: x + y, [F.col(c) for c in outlier_cols])
+df = df.withColumn("label", F.when(sum_of_outliers > 0, 1).otherwise(0))
 
 # Drop intermediate columns if needed
 drop_cols = []
