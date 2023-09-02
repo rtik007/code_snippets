@@ -14,10 +14,10 @@ df = spark.read.csv("path_to_your_data.csv", header=True, inferSchema=True)
 features = ["feature1", "feature2", ...]  # replace with your feature column names
 
 for feature in features:
-    # Calculate Q1, Q3, and IQR for each date
+    # Calculate Q1, Q3, and IQR for each date using the expr function
     windowSpec = Window.partitionBy("date")
-    df = df.withColumn(f"{feature}_Q1", F.percentile_approx(feature, 0.25).over(windowSpec))
-    df = df.withColumn(f"{feature}_Q3", F.percentile_approx(feature, 0.75).over(windowSpec))
+    df = df.withColumn(f"{feature}_Q1", F.expr(f"percentile_approx({feature}, 0.25)").over(windowSpec))
+    df = df.withColumn(f"{feature}_Q3", F.expr(f"percentile_approx({feature}, 0.75)").over(windowSpec))
     df = df.withColumn(f"{feature}_IQR", (F.col(f"{feature}_Q3") - F.col(f"{feature}_Q1")))
     
     # Calculate lower and upper bounds for outliers
