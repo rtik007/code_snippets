@@ -1,0 +1,45 @@
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+# Initialize SparkSession
+spark = SparkSession.builder \
+    .appName("Outlier Detection") \
+    .getOrCreate()
+
+# Assuming the data is in a CSV format, read your dataset
+df = spark.read.csv("path_to_your_data.csv", header=True, inferSchema=True)
+
+# Assuming 'date' is the column name for dates and 'features' is a list of feature column names
+features = ["feature1", "feature2", ...]  # replace with your feature column names
+
+for feature in features:
+    # Calculate Q1, Q3, and IQR for each date
+    windowSpec = Window.partitionBy("date")
+    df = df.withColumn(f"{feature}_Q1", F.percentile_approx(feature, 0.25).over(windowSpec))
+    df = df.withColumn(f"{feature}_Q3", F.percentile_approx(feature, 0.75).over(windowSpec))
+    df = df.withColumn(f"{feature}_IQR", (F.col(f"{feature}_Q3") - F.col(f"{feature}_Q1")))
+    
+    # Calculate lower and upper bounds for outliers
+    df = df.withColumn(f"{feature}_lower_bound", F.col(f"{feature}_Q1") - 1.5 * F.col(f"{feature}_IQR"))
+    df = df.withColumn(f"{feature}_upper_bound", F.col(f"{feature}_Q3") + 1.5 * F.col(f"{feature}_IQR"))
+    
+    # Create a new column to indicate if a value is an outlier
+    df = df.withColumn(f"{feature}_outlier", 
+                       F.when((F.col(feature) < F.col(f"{feature}_lower_bound")) | 
+                              (F.col(feature) > F.col(f"{feature}_upper_bound")), 1).otherwise(0))
+
+# Derive a combined 'label' column
+outlier_cols = [f"{feature}_outlier" for feature in features]
+df = df.withColumn("label", F.when(F.sum(*outlier_cols) > 0, 1).otherwise(0))
+
+# Drop intermediate columns if needed
+drop_cols = []
+for feature in features:
+    drop_cols.extend([f"{feature}_Q1", f"{feature}_Q3", f"{feature}_IQR", f"{feature}_lower_bound", f"{feature}_upper_bound"])
+df = df.drop(*drop_cols)
+
+df.show()
+
+# Stop the SparkSession when done
+spark.stop()
