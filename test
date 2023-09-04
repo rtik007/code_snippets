@@ -1,47 +1,93 @@
-from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql.window import Window
+from pyspark.sql import SparkSession, functions as F
+from pyspark.ml.feature import QuantileDiscretizer
 from functools import reduce
 
-# Initialize SparkSession
-spark = SparkSession.builder \
-    .appName("Outlier Detection") \
-    .getOrCreate()
+# Initialize Spark Session
+spark = SparkSession.builder.appName("OutlierDetection").getOrCreate()
 
-# Assuming the data is in a CSV format, read your dataset
-df = spark.read.csv("path_to_your_data.csv", header=True, inferSchema=True)
+# Function to check if a column exists in a DataFrame
+def column_exists(df, column_name):
+    return column_name in df.columns
 
-# Assuming 'date' is the column name for dates and 'features' is a list of feature column names
-features = ["feature1", "feature2", ...]  # replace with your feature column names
+# Assuming df is your dataframe
+# df = spark.read.... # Read your dataframe here
 
-for feature in features:
-    # Calculate Q1, Q3, and IQR for each date using the expr function
-    windowSpec = Window.partitionBy("date")
-    df = df.withColumn(f"{feature}_Q1", F.expr(f"percentile_approx({feature}, 0.25)").over(windowSpec))
-    df = df.withColumn(f"{feature}_Q3", F.expr(f"percentile_approx({feature}, 0.75)").over(windowSpec))
-    df = df.withColumn(f"{feature}_IQR", (F.col(f"{feature}_Q3") - F.col(f"{feature}_Q1")))
+feature_columns = [c for c in df.columns if c not in ['date', 'id']]
+all_dates = [row.date for row in df.select("date").distinct().collect() if row.date is not None]
+
+sampled_dfs = []
+
+# Calculate the desired total sample size and the sample size per date
+total_count = df.count()
+desired_sample_count = int(0.01 * total_count)
+desired_count_per_date = desired_sample_count // len(all_dates)
+
+for date in all_dates:
+    temp_df = df.filter(F.col("date") == date)
+
+    # Outlier Detection for each feature column
+    for column in feature_columns:
+        try:
+            discretizer = QuantileDiscretizer(numBuckets=4, inputCol=column, outputCol="discrete_{}".format(column))
+            discretized_df = discretizer.fit(temp_df).transform(temp_df)
+            
+            temp_df = discretized_df.withColumn("outlier_{}".format(column),
+                                                F.when((F.col("discrete_{}".format(column)) == 0) | 
+                                                       (F.col("discrete_{}".format(column)) == 3), 1).otherwise(0))
+        except:
+            print(f"Error processing column {column} on date {date}. Skipping outlier detection for this column.")
     
-    # Calculate lower and upper bounds for outliers
-    df = df.withColumn(f"{feature}_lower_bound", F.col(f"{feature}_Q1") - 1.5 * F.col(f"{feature}_IQR"))
-    df = df.withColumn(f"{feature}_upper_bound", F.col(f"{feature}_Q3") + 1.5 * F.col(f"{feature}_IQR"))
+    # Check if outlier columns were created
+    for c in feature_columns:
+        if "outlier_{}".format(c) not in temp_df.columns:
+            print(f"Outlier column for {c} was not created!")
+
+    # Sum the outlier columns to create the label column
+    temp_df = temp_df.withColumn("label", reduce(lambda x, y: x + y, [F.col("outlier_{}".format(c)) for c in feature_columns]))
+
+    # Drop outlier and discretized columns if they exist
+    for column in feature_columns:
+        outlier_column_name = "outlier_{}".format(column)
+        discrete_column_name = "discrete_{}".format(column)
+        if column_exists(temp_df, outlier_column_name):
+            temp_df = temp_df.drop(outlier_column_name)
+        if column_exists(temp_df, discrete_column_name):
+            temp_df = temp_df.drop(discrete_column_name)
+
+    label_counts = temp_df.groupBy("label").count().rdd.collectAsMap()
+    total_for_date = temp_df.count()
+    label_fractions = {label: count / total_for_date for label, count in label_counts.items()}
+
+    samples_for_date = []
+    for label, fraction in label_fractions.items():
+        desired_samples = int(desired_count_per_date * fraction)
+        sample_fraction = min(1.0, desired_samples/label_counts[label])
+        
+        if sample_fraction == 1.0 and desired_samples > label_counts[label]:
+            sampled_data = temp_df.filter(F.col("label") == label).sample(withReplacement=True, fraction=sample_fraction)
+        else:
+            sampled_data = temp_df.filter(F.col("label") == label).sample(withReplacement=False, fraction=sample_fraction)
+        
+        samples_for_date.append(sampled_data)
+
+    sampled_temp_df = samples_for_date[0]
+    for s_df in samples_for_date[1:]:
+        sampled_temp_df = sampled_temp_df.union(s_df)
     
-    # Create a new column to indicate if a value is an outlier
-    df = df.withColumn(f"{feature}_outlier", 
-                       F.when((F.col(feature) < F.col(f"{feature}_lower_bound")) | 
-                              (F.col(feature) > F.col(f"{feature}_upper_bound")), 1).otherwise(0))
+    sampled_dfs.append(sampled_temp_df)
 
-# Derive a combined 'label' column
-outlier_cols = [f"{feature}_outlier" for feature in features]
-sum_of_outliers = reduce(lambda x, y: x + y, [F.col(c) for c in outlier_cols])
-df = df.withColumn("label", F.when(sum_of_outliers > 0, 1).otherwise(0))
+final_sampled_df = sampled_dfs[0]
+for s_df in sampled_dfs[1:]:
+    final_sampled_df = final_sampled_df.union(s_df)
 
-# Drop intermediate columns if needed
-drop_cols = []
-for feature in features:
-    drop_cols.extend([f"{feature}_Q1", f"{feature}_Q3", f"{feature}_IQR", f"{feature}_lower_bound", f"{feature}_upper_bound"])
-df = df.drop(*drop_cols)
+population_summary = df.describe().toPandas()
+sample_summary = final_sampled_df.describe().toPandas()
 
-df.show()
+# Display the population and sample summary
+print("Population Summary:")
+print(population_summary)
+print("\nSample Summary:")
+print(sample_summary)
 
-# Stop the SparkSession when done
+# Stop the Spark Session
 spark.stop()
