@@ -12,6 +12,11 @@ def column_exists(df, column_name):
 # Assuming df is your dataframe
 # df = spark.read.... # Read your dataframe here
 
+# Filter data for dates between 1st May and 31st May 2023
+df = df.filter((F.col("date") >= "2023-05-01") & (F.col("date") <= "2023-05-31"))
+
+#################################################################################################################
+
 feature_columns = [c for c in df.columns if c not in ['date', 'id']]
 all_dates = [row.date for row in df.select("date").distinct().collect() if row.date is not None]
 
