@@ -204,6 +204,113 @@ heatmap.set_yticklabels(columns, rotation=0)
 plt.tight_layout()
 plt.show()
 
+############################
+## One more correlogram
+############################
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Sample data creation (you should replace this with your actual data)
+np.random.seed(0)
+data = pd.DataFrame({
+    'SCST': np.random.rand(100),
+    'female': np.random.rand(100),
+    'mmedia': np.random.rand(100),
+    'poor': np.random.rand(100),
+    'prop4pl': np.random.rand(100),
+    'lat': np.random.rand(100),
+    'never_breastfeed': np.random.rand(100),
+    'low_bmi': np.random.rand(100),
+    'hindu': np.random.rand(100),
+    'mothage_20': np.random.rand(100),
+    'low_birthintval': np.random.rand(100),
+    'watersup': np.random.rand(100),
+    'hh_fem': np.random.rand(100),
+    'edu': np.random.rand(100),
+    'ptoilet': np.random.rand(100),
+    'urban': np.random.rand(100),
+    'pcfuel': np.random.rand(100),
+    'vacc': np.random.rand(100)
+})
+
+# Calculate the correlation matrix
+corr = data.corr()
+
+# Generate a mask for the upper triangle
+mask = np.triu(np.ones_like(corr, dtype=bool))
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(11, 9))
+
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(240, 10, as_cmap=True)
+
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(corr, mask=mask, cmap=cmap, vmax=1, vmin=-1, center=0,
+            square=True, linewidths=.5, cbar_kws={"shrink": .5}, annot=True, fmt=".1f")
+
+# Adjust the title and labels
+plt.title('Correlogram')
+plt.show()
+
+###################################
+## Another one
+##################################
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Sample data creation (replace this with your actual data)
+np.random.seed(0)
+data = pd.DataFrame({
+    'SCST': np.random.rand(100),
+    'female': np.random.rand(100),
+    'mmedia': np.random.rand(100),
+    'poor': np.random.rand(100),
+    'prop4pl': np.random.rand(100),
+    'lat': np.random.rand(100),
+    'never_breastfeed': np.random.rand(100),
+    'low_bmi': np.random.rand(100),
+    'hindu': np.random.rand(100),
+    'mothage_20': np.random.rand(100),
+    'low_birthintval': np.random.rand(100),
+    'watersup': np.random.rand(100),
+    'hh_fem': np.random.rand(100),
+    'edu': np.random.rand(100),
+    'ptoilet': np.random.rand(100),
+    'urban': np.random.rand(100),
+    'pcfuel': np.random.rand(100),
+    'vacc': np.random.rand(100)
+})
+
+# Calculate the correlation matrix
+corr = data.corr()
+
+# Generate a mask for the lower triangle
+mask = np.tril(np.ones_like(corr, dtype=bool))
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(12, 10))
+
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(240, 10, as_cmap=True)
+
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(corr, mask=mask, cmap=cmap, vmax=1, vmin=-1, center=0,
+            square=True, linewidths=.5, cbar_kws={"shrink": .5}, annot=True, fmt=".1f", annot_kws={"size": 8})
+
+
+# Rotate the tick labels for better readability
+plt.xticks(rotation=90)
+plt.yticks(rotation=0)
+
+# Adjust the title and labels
+plt.title('Correlogram', fontsize=15)
+plt.show()
+
 
 
 
