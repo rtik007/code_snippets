@@ -95,6 +95,40 @@ g.map_offdiag(sns.scatterplot)
 # Add a legend
 g.add_legend()
 
+#################################################
+### with Many variables - create a pair plot where the target variable is based on outliers (values greater than the 99th percentile and less than the 1st percentile)
+#####################################################
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Load your dataset (here I'm using a random dataset for demonstration)
+np.random.seed(42)
+data = np.random.rand(1000, 30)
+columns = ['NoOd', 'NoE7', 'Pop', 'Wok', 'HH', 'OwnO', 'OwnM', 'SocR', 'PriR', 
+           'FV0', 'FV1', 'FV2', 'FV3', 'FV4', 'FV5', 'FV6', 'FV7', 'FV8', 'FV9', 
+           'FV10', 'FV11', 'DmA', 'CTA', 'CTB', 'CTC', 'CTD', 'CTE', 'CTF', 'CTG', 'CTH']
+df = pd.DataFrame(data, columns=columns)
+
+# Compute the 1st and 99th percentiles
+lower_bound = df.quantile(0.01)
+upper_bound = df.quantile(0.99)
+
+# Create a new column indicating outliers
+df['outlier'] = ((df < lower_bound) | (df > upper_bound)).any(axis=1)
+
+# Map outliers to strings for better visualization
+df['outlier'] = df['outlier'].map({True: 'outlier', False: 'normal'})
+
+# Create the pair plot
+sns.set(style="ticks")
+pair_plot = sns.pairplot(df, hue="outlier", markers=["o", "s"])
+
+# Show the plot
+plt.show()
+
 plt.show()
 
 
