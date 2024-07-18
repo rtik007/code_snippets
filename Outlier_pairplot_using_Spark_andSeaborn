@@ -53,3 +53,48 @@ g.map_offdiag(sns.scatterplot)
 g.add_legend()
 
 plt.show()
+##################################################################################################################
+## Another version using pandas
+##################################################################################################################
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.datasets import load_iris
+
+# Load the Iris dataset
+iris = load_iris()
+df = pd.DataFrame(data=iris.data, columns=iris.feature_names)
+
+# Calculate percentiles
+percentiles = df.quantile([0.05, 0.95])
+
+# Function to categorize each value
+def categorize_value(val, lower_bound, upper_bound):
+    return 'outlier' if val < lower_bound or val > upper_bound else 'normal'
+
+# Apply categorization to each row and create a new column 'category'
+def categorize_row(row):
+    for col in df.columns:
+        lower_bound = percentiles[col].iloc[0]
+        upper_bound = percentiles[col].iloc[1]
+        if categorize_value(row[col], lower_bound, upper_bound) == 'outlier':
+            return 'outlier'
+    return 'normal'
+
+df['category'] = df.apply(categorize_row, axis=1)
+
+# Initialize the PairGrid with the 'category' column as hue
+g = sns.PairGrid(df, hue="category", diag_sharey=False)
+g.map_upper(sns.scatterplot)
+#g.map_diag(sns.histplot, color=".1")  # Uncomment for histograms on diagonal
+g.map_lower(sns.kdeplot, color=".3")
+g.map_diag(sns.kdeplot)
+g.map_offdiag(sns.scatterplot)
+
+# Add a legend
+g.add_legend()
+
+plt.show()
+
+
