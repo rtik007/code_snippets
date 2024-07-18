@@ -130,5 +130,80 @@ pair_plot = sns.pairplot(df, hue="outlier", markers=["o", "s"])
 plt.show()
 
 plt.show()
+############################################
+# Heatmap
+############################################
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Example DataFrame
+# Replace this with your actual data
+np.random.seed(0)
+data = np.random.rand(1000, 30)
+columns = ['NoOd', 'NoE7', 'Pop', 'Wok', 'HH', 'OwnO', 'OwnM', 'SocR', 'PriR', 
+           'FV0', 'FV1', 'FV2', 'FV3', 'FV4', 'FV5', 'FV6', 'FV7', 'FV8', 'FV9', 
+           'FV10', 'FV11', 'DmA', 'CTA', 'CTB', 'CTC', 'CTD', 'CTE', 'CTF', 'CTG', 'CTH']
+
+df = pd.DataFrame(data, columns=columns)
+
+# Calculate the correlation matrix
+corr = df.corr()
+
+# Set up the matplotlib figure
+plt.figure(figsize=(12, 10))
+
+# Draw the heatmap with the mask and correct aspect ratio
+sns.heatmap(corr, annot=False, fmt=".2f", cmap='coolwarm', center=0, 
+            square=True, linewidths=.5, cbar_kws={"shrink": .5},
+            vmin=-1, vmax=1)
+
+# Adjust the ticks and labels for better visualization
+plt.xticks(rotation=90)
+plt.yticks(rotation=0)
+plt.tight_layout()
+
+# Show the plot
+plt.show()
+
+###############################
+## Heatmap - only lwer diagonal
+##############################
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Sample DataFrame
+np.random.seed(0)
+data = np.random.rand(1000, 30)  # Adjusted to 30 columns to match the number of labels
+columns = ['NoOd', 'NoE7', 'Pop', 'Wok', 'HH', 'OwnO', 'OwnM', 'SocR', 'PriR', 
+           'FV0', 'FV1', 'FV2', 'FV3', 'FV4', 'FV5', 'FV6', 'FV7', 'FV8', 'FV9', 
+           'FV10', 'FV11', 'DmA', 'CTA', 'CTB', 'CTC', 'CTD', 'CTE', 'CTF', 'CTG', 'CTH']
+
+df = pd.DataFrame(data, columns=columns)
+
+# Calculate the correlation matrix
+corr = df.corr()
+
+# Set up the matplotlib figure
+plt.figure(figsize=(12, 10))
+
+# Draw the heatmap with a mask and correct aspect ratio
+mask = np.triu(np.ones_like(corr, dtype=bool))
+heatmap = sns.heatmap(corr, mask=mask, annot=False, fmt=".2f", cmap='coolwarm', center=0, 
+                      square=True, linewidths=.5, cbar_kws={"shrink": .5}, vmin=-1, vmax=1)
+
+# Customize tick labels
+heatmap.set_xticks(np.arange(len(columns)) + 0.5)
+heatmap.set_xticklabels(columns, rotation=90)
+heatmap.set_yticks(np.arange(len(columns)) + 0.5)
+heatmap.set_yticklabels(columns, rotation=0)
+
+plt.tight_layout()
+plt.show()
+
+
 
 
