@@ -1,0 +1,55 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, when, lit, percentile_approx
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("IrisOutliers").getOrCreate()
+
+# Load the Iris dataset into a Spark DataFrame
+# For demonstration purposes, using a small dataset
+# Replace this with your large dataset
+iris = load_iris()
+data = iris.data
+columns = iris.feature_names
+
+# Convert to Spark DataFrame
+df = spark.createDataFrame(pd.DataFrame(data, columns=columns))
+
+# Calculate the 1st and 99th percentiles for each column
+percentiles = df.agg(
+    *[percentile_approx(col(c), [0.01, 0.99]).alias(c) for c in columns]
+).collect()[0]
+
+# Create lower and upper bounds dictionaries
+lower_bounds = {c: percentiles[c][0] for c in columns}
+upper_bounds = {c: percentiles[c][1] for c in columns}
+
+# Add a new column 'category' to categorize data
+for c in columns:
+    df = df.withColumn(
+        'category',
+        when(col(c) < lower_bounds[c], 'lower_outlier')
+        .when(col(c) > upper_bounds[c], 'higher_outlier')
+        .otherwise(col('category'))
+    )
+
+# Fill null values with 'normal'
+df = df.fillna('normal', subset=['category'])
+
+# Convert to Pandas DataFrame for visualization
+pandas_df = df.toPandas()
+
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Initialize the PairGrid with the 'category' column as hue
+g = sns.PairGrid(pandas_df, hue="category", diag_sharey=False)
+g.map_upper(sns.scatterplot)
+g.map_lower(sns.kdeplot)
+g.map_diag(sns.kdeplot)
+g.map_offdiag(sns.scatterplot)
+
+# Add a legend
+g.add_legend()
+
+plt.show()
