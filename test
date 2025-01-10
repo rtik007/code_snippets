@@ -1,98 +1,135 @@
-from pyspark.sql import SparkSession, functions as F
-from pyspark.ml.feature import QuantileDiscretizer
-from functools import reduce
+from pyspark.sql import functions as F
+from pyspark.sql import Window
 
-# Initialize Spark Session
-spark = SparkSession.builder.appName("OutlierDetection").getOrCreate()
+# -----------------------------------------------------------------------------
+# 1) Example column definitions (adjust to your actual column variables)
+# -----------------------------------------------------------------------------
+user_id_col = ["user_id_part1", "user_id_part2", "user_id_part3"]  # e.g. three columns
+date_col = ["dt"]  # single date column in a list
+ip_col = "src_ip_bc"  # IP address column name
 
-# Function to check if a column exists in a DataFrame
-def column_exists(df, column_name):
-    return column_name in df.columns
+# Suppose your input DataFrame is df with columns:
+#   [user_id_part1, user_id_part2, user_id_part3, dt, src_ip_bc, ...]
+# Adjust names/types as needed.
+# -----------------------------------------------------------------------------
 
-# Assuming df is your dataframe
-# df = spark.read.... # Read your dataframe here
+# -----------------------------------------------------------------------------
+# 2) Mark each (user, date, IP) row as "new IP" or "old IP"
+#    Window partition is by (user_id, ip), ordered by the date.
+# -----------------------------------------------------------------------------
+# Window to find previous usage of the SAME IP by the SAME user
+w_ip = Window.partitionBy(*user_id_col, ip_col).orderBy(F.col(date_col[0]).asc())
 
-# Filter data for dates between 1st May and 31st May 2023
-df = df.filter((F.col("date") >= "2023-05-01") & (F.col("date") <= "2023-05-31"))
+df_marked = (
+    df
+    # previous date of usage for that user+IP
+    .withColumn(
+        "prev_ip_dt",
+        F.lag(date_col[0]).over(w_ip)
+    )
+    # number of days since this user+IP was last used
+    .withColumn(
+        "days_since_last_ip",
+        F.datediff(F.col(date_col[0]), F.col("prev_ip_dt"))
+    )
+    # is_new_ip: 1 if gap > 30 or if no previous usage, else 0
+    .withColumn(
+        "is_new_ip",
+        F.when(
+            (F.col("days_since_last_ip") > 30) | (F.col("days_since_last_ip").isNull()),
+            1
+        ).otherwise(0)
+    )
+)
 
-#################################################################################################################
+# -----------------------------------------------------------------------------
+# 3) Aggregate daily per user:
+#    - Distinct IPs used that day
+#    - How many of them are marked as new?
+# -----------------------------------------------------------------------------
+df_day_agg = (
+    df_marked
+    # First group by (user, date, ip) in case of duplicates in the same day
+    .groupBy(*user_id_col, date_col[0], ip_col)
+    .agg(F.max("is_new_ip").alias("is_new_ip"))  # if multiple rows for same IP/day
+    # Then group again by user+day to get count of distinct IPs and new IPs
+    .groupBy(*user_id_col, date_col[0])
+    .agg(
+        F.countDistinct(ip_col).alias("count_ip"),
+        F.sum("is_new_ip").alias("count_new_ip")
+    )
+)
 
-feature_columns = [c for c in df.columns if c not in ['date', 'id']]
-all_dates = [row.date for row in df.select("date").distinct().collect() if row.date is not None]
+# -----------------------------------------------------------------------------
+# 4) Check if the user had ANY usage in the last 30 days.
+#    If not, we assign category = -1.
+#
+#    A simple trick:
+#    - For each (user, day), look at the immediately PREVIOUS day the user used the system.
+#    - If dt - prev_dt <= 30, user had usage in the last 30 days; otherwise, no.
+# -----------------------------------------------------------------------------
+w_user = Window.partitionBy(*user_id_col).orderBy(F.col(date_col[0]).asc())
 
-sampled_dfs = []
+df_day_usage = (
+    df_day_agg
+    # previous day the user used the system at all
+    .withColumn(
+        "prev_dt",
+        F.lag(date_col[0]).over(w_user)
+    )
+    # has_usage_last_30d: 1 if dt - prev_dt <= 30, else 0 (or if no prev_dt => 0)
+    .withColumn(
+        "has_usage_last_30d",
+        F.when(
+            F.col("prev_dt").isNotNull() & (F.datediff(F.col(date_col[0]), F.col("prev_dt")) <= 30),
+            1
+        ).otherwise(0)
+    )
+)
 
-# Calculate the desired total sample size and the sample size per date
-total_count = df.count()
-desired_sample_count = int(0.01 * total_count)
-desired_count_per_date = desired_sample_count // len(all_dates)
+# -----------------------------------------------------------------------------
+# 5) Compute fraction of new IP addresses for that day -> define the categorical value
+#    fraction_new = count_new_ip / count_ip
+#    category =
+#       -1 if has_usage_last_30d == 0
+#        0 if fraction_new == 0.0
+#        1 if 0.0 < fraction_new < 1.0
+#      100 if fraction_new == 1.0
+# -----------------------------------------------------------------------------
+df_final = (
+    df_day_usage
+    .withColumn(
+        "fraction_new",
+        (F.col("count_new_ip") / F.col("count_ip")).cast("double")
+    )
+    .withColumn(
+        "ip_new_category",
+        F.when(
+            F.col("has_usage_last_30d") == 0,  # no usage last 30 days
+            F.lit(-1)
+        ).when(
+            F.col("fraction_new") == 0,
+            F.lit(0)
+        ).when(
+            F.col("fraction_new") == 1,
+            F.lit(100)
+        ).otherwise(F.lit(1))
+    )
+)
 
-for date in all_dates:
-    temp_df = df.filter(F.col("date") == date)
+# df_final now has:
+#  [ user_id_part1, user_id_part2, user_id_part3, dt,
+#    count_ip, count_new_ip, has_usage_last_30d, fraction_new, ip_new_category ]
+#
+# You can rename columns or select only those you want in the final output.
+# -----------------------------------------------------------------------------
 
-    # Outlier Detection for each feature column
-    for column in feature_columns:
-        try:
-            discretizer = QuantileDiscretizer(numBuckets=4, inputCol=column, outputCol="discrete_{}".format(column))
-            discretized_df = discretizer.fit(temp_df).transform(temp_df)
-            
-            temp_df = discretized_df.withColumn("outlier_{}".format(column),
-                                                F.when((F.col("discrete_{}".format(column)) == 0) | 
-                                                       (F.col("discrete_{}".format(column)) == 3), 1).otherwise(0))
-        except:
-            print(f"Error processing column {column} on date {date}. Skipping outlier detection for this column.")
-    
-    # Check if outlier columns were created
-    for c in feature_columns:
-        if "outlier_{}".format(c) not in temp_df.columns:
-            print(f"Outlier column for {c} was not created!")
+# Example final select:
+df_result = df_final.select(
+    *user_id_col,
+    date_col[0],
+    "ip_new_category"
+)
 
-    # Sum the outlier columns to create the label column
-    temp_df = temp_df.withColumn("label", reduce(lambda x, y: x + y, [F.col("outlier_{}".format(c)) for c in feature_columns]))
-
-    # Drop outlier and discretized columns if they exist
-    for column in feature_columns:
-        outlier_column_name = "outlier_{}".format(column)
-        discrete_column_name = "discrete_{}".format(column)
-        if column_exists(temp_df, outlier_column_name):
-            temp_df = temp_df.drop(outlier_column_name)
-        if column_exists(temp_df, discrete_column_name):
-            temp_df = temp_df.drop(discrete_column_name)
-
-    label_counts = temp_df.groupBy("label").count().rdd.collectAsMap()
-    total_for_date = temp_df.count()
-    label_fractions = {label: count / total_for_date for label, count in label_counts.items()}
-
-    samples_for_date = []
-    for label, fraction in label_fractions.items():
-        desired_samples = int(desired_count_per_date * fraction)
-        sample_fraction = min(1.0, desired_samples/label_counts[label])
-        
-        if sample_fraction == 1.0 and desired_samples > label_counts[label]:
-            sampled_data = temp_df.filter(F.col("label") == label).sample(withReplacement=True, fraction=sample_fraction)
-        else:
-            sampled_data = temp_df.filter(F.col("label") == label).sample(withReplacement=False, fraction=sample_fraction)
-        
-        samples_for_date.append(sampled_data)
-
-    sampled_temp_df = samples_for_date[0]
-    for s_df in samples_for_date[1:]:
-        sampled_temp_df = sampled_temp_df.union(s_df)
-    
-    sampled_dfs.append(sampled_temp_df)
-
-final_sampled_df = sampled_dfs[0]
-for s_df in sampled_dfs[1:]:
-    final_sampled_df = final_sampled_df.union(s_df)
-
-population_summary = df.describe().toPandas()
-sample_summary = final_sampled_df.describe().toPandas()
-
-# Display the population and sample summary
-print("Population Summary:")
-print(population_summary)
-print("\nSample Summary:")
-print(sample_summary)
-
-# Stop the Spark Session
-spark.stop()
+# df_result is your desired DataFrame with the new categorical feature
+# indicating IP-newness compared to the last 30 days.
