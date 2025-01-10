@@ -1,5 +1,1 @@
-# Extract first two octets and create a new column
-df_with_octets = df.withColumn(
-    "first_two_octets",
-    expr("substring(ip_address, 1, locate('.', ip_address, locate('.', ip_address) + 1) - 1)")
-)
+
