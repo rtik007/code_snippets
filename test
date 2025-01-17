@@ -1,101 +1,13 @@
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
 
-def impute_value(col_expr, strategy="static", fill_value=None, window_spec=None, global_fallback=None):
-    """
-    Replaces null values in `col_expr` according to the specified strategy.
-    
-    Parameters:
-        col_expr (Column): Spark Column expression.
-        strategy (str): ["static", "min", "max", "avg", "median"].
-        fill_value: Value for static imputation.
-        window_spec (WindowSpec): Window specification for aggregate-based imputations.
-        global_fallback: A secondary fallback value if window-based imputation still results in NULL.
-    """
-    if strategy == "static":
-        imputed_expr = F.when(col_expr.isNull(), F.lit(fill_value)).otherwise(col_expr)
-    elif strategy in ["min", "max", "avg", "median"]:
-        if window_spec is None:
-            raise ValueError(f"WindowSpec is required for strategy: {strategy}")
-        
-        if strategy == "min":
-            imputed_expr = F.min(col_expr).over(window_spec)
-        elif strategy == "max":
-            imputed_expr = F.max(col_expr).over(window_spec)
-        elif strategy == "avg":
-            imputed_expr = F.avg(col_expr).over(window_spec)
-        elif strategy == "median":
-            imputed_expr = F.expr(f"percentile_approx({col_expr}, 0.5)").over(window_spec)
-        
-        # Use column imputation if available, otherwise fallback to a global value
-        imputed_expr = F.when(col_expr.isNull(), imputed_expr).otherwise(col_expr)
-    else:
-        raise ValueError(f"Unknown imputation strategy: {strategy}")
-
-    # Apply secondary global fallback if imputation still results in NULL
-    if global_fallback is not None:
-        imputed_expr = F.when(imputed_expr.isNull(), F.lit(global_fallback)).otherwise(imputed_expr)
-
-    return imputed_expr
-
-def look_back_comparison_calc(
-    IN_df, feature_cols, look_back_days, window_range,
-    numerator_strategy="static", numerator_fill_value=None, numerator_global_fallback=1.0,
-    denominator_strategy="avg", denominator_fill_value=None, denominator_global_fallback=1.0
-):
-    """
-    Computes comparison features (avg/max ratios) over a lookback period with imputation strategies.
-    
-    Parameters:
-        IN_df (DataFrame): Input Spark DataFrame.
-        feature_cols (list): List of column names to compute ratios.
-        look_back_days (int): For naming the output columns.
-        window_range (Window): Spark WindowSpec for aggregation.
-        numerator_strategy (str): Strategy for numerator imputation.
-        numerator_fill_value: Static fill value for numerator imputation.
-        numerator_global_fallback: Fallback if numerator remains NULL.
-        denominator_strategy (str): Strategy for denominator imputation.
-        denominator_fill_value: Static fill value for denominator imputation.
-        denominator_global_fallback: Fallback if denominator remains NULL.
-    
-    Returns:
-        DataFrame with computed ratios.
-    """
-    
-    df = IN_df  # Local reference
-    
-    for col_name in feature_cols:
-        avg_col_expr = F.avg(F.col(col_name)).over(window_range)
-        max_col_expr = F.max(F.col(col_name)).over(window_range)
-        
-        # Impute numerator
-        numerator_expr = impute_value(
-            F.col(col_name), numerator_strategy, numerator_fill_value, window_range, numerator_global_fallback
-        )
-
-        # Impute denominator (avg)
-        denominator_avg_expr = impute_value(
-            avg_col_expr, denominator_strategy, denominator_fill_value, window_range, denominator_global_fallback
-        )
-        
-        # Impute denominator (max)
-        denominator_max_expr = impute_value(
-            max_col_expr, denominator_strategy, denominator_fill_value, window_range, denominator_global_fallback
-        )
-        
-        # Avoid divide-by-zero issues
-        df = df.withColumn(
-            f"{col_name}_last_{look_back_days}_avg_ratio",
-            F.when(
-                (denominator_avg_expr != 0) & (~F.isnull(denominator_avg_expr)), 
-                numerator_expr / denominator_avg_expr
-            ).otherwise(F.lit(1.0))  # Fallback to 1.0 ratio
-        ).withColumn(
-            f"{col_name}_last_{look_back_days}_max_ratio",
-            F.when(
-                (denominator_max_expr != 0) & (~F.isnull(denominator_max_expr)), 
-                numerator_expr / denominator_max_expr
-            ).otherwise(F.lit(1.0))  # Fallback to 1.0 ratio
-        )
-    
-    return df
+df = df.withColumn(
+    f"{col_name}_last_{look_back_days}_avg_ratio",
+    F.when((numerator_expr != 0) & (~F.isnull(numerator_expr)) & (~F.isnull(denominator_avg_expr)), numerator_expr / denominator_avg_expr)
+     .when((numerator_expr == 0) | (F.isnull(numerator_expr)), F.lit(0.0))
+     .otherwise(numerator_expr)  # If denominator is NULL, return numerator
+).withColumn(
+    f"{col_name}_last_{look_back_days}_max_ratio",
+    F.when((numerator_expr != 0) & (~F.isnull(numerator_expr)) & (~F.isnull(denominator_max_expr)), numerator_expr / denominator_max_expr)
+     .when((numerator_expr == 0) | (F.isnull(numerator_expr)), F.lit(0.0))
+     .otherwise(numerator_expr)  # If denominator is NULL, return numerator
+)
