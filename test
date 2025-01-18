@@ -1,13 +1,1 @@
-from pyspark.sql import functions as F
 
-df = df.withColumn(
-    f"{col_name}_last_{look_back_days}_avg_ratio",
-    F.when((numerator_expr != 0) & (~F.isnull(numerator_expr)) & (~F.isnull(denominator_avg_expr)), numerator_expr / denominator_avg_expr)
-     .when((numerator_expr == 0) | (F.isnull(numerator_expr)), F.lit(0.0))
-     .otherwise(numerator_expr)  # If denominator is NULL, return numerator
-).withColumn(
-    f"{col_name}_last_{look_back_days}_max_ratio",
-    F.when((numerator_expr != 0) & (~F.isnull(numerator_expr)) & (~F.isnull(denominator_max_expr)), numerator_expr / denominator_max_expr)
-     .when((numerator_expr == 0) | (F.isnull(numerator_expr)), F.lit(0.0))
-     .otherwise(numerator_expr)  # If denominator is NULL, return numerator
-)
