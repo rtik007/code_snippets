@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""
+Production-Ready Document Analysis Script
+
+This script performs the following analyses on a collection of documents:
+1. Perplexity scoring using GPT-2 to flag statistically unusual documents.
+2. Embedding-based outlier detection using Sentence Transformers and DBSCAN.
+3. Topic modeling with Latent Dirichlet Allocation (LDA) to extract prevalent topics.
+4. Basic text feature analysis (e.g., word count, sentence count, average sentence length).
+
+Dependencies:
+- transformers
+- torch
+- sentence_transformers
+- scikit-learn
+- nltk
+- pandas
+- matplotlib
+
+References:
+- HuggingFace Transformers for perplexity: :contentReference[oaicite:0]{index=0}
+- Sentence Transformers: https://www.sbert.net/
+- Scikit-learn LDA: :contentReference[oaicite:1]{index=1}
+- NLTK Tokenization: https://www.nltk.org/
+"""
+
+import logging
+import sys
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import nltk
+from sklearn.cluster import DBSCAN
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.feature_extraction.text import CountVectorizer
+
+import torch
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from sentence_transformers import SentenceTransformer
+
+# Configure logging for production quality
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+# Download necessary NLTK data (only once; production systems may pre-download this)
+nltk.download('punkt', quiet=True)
+
+# -----------------------------
+# Perplexity Calculation Function
+# -----------------------------
+def calculate_perplexity(text, model, tokenizer, max_length=1024):
+    """
+    Compute perplexity for the given text using a pre-trained language model.
+    Lower perplexity indicates a text that is more in-distribution.
+
+    Parameters:
+        text (str): The document text.
+        model: Pre-trained language model (e.g., GPT-2).
+        tokenizer: Corresponding tokenizer.
+        max_length (int): Maximum token length for truncation.
+
+    Returns:
+        float: Perplexity score.
+    
+    References:
+    - HuggingFace Transformers: :contentReference[oaicite:2]{index=2}
+    """
+    try:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
+        with torch.no_grad():
+            outputs = model(**inputs, labels=inputs["input_ids"])
+            loss = outputs.loss
+        perplexity = torch.exp(loss)
+        return perplexity.item()
+    except Exception as e:
+        logging.error(f"Error calculating perplexity: {e}")
+        return float('inf')
+
+
+# -----------------------------
+# Embedding-Based Outlier Detection
+# -----------------------------
+def detect_outliers(embeddings, eps=0.8, min_samples=2):
+    """
+    Identify outliers using DBSCAN clustering on document embeddings.
+    Documents labeled as noise (-1) are considered unusual.
+
+    Parameters:
+        embeddings (np.ndarray): Array of document embeddings.
+        eps (float): DBSCAN eps parameter.
+        min_samples (int): DBSCAN min_samples parameter.
+
+    Returns:
+        np.ndarray: Indices of outlier documents.
+    
+    References:
+    - DBSCAN in scikit-learn: :contentReference[oaicite:3]{index=3}
+    """
+    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(embeddings)
+    outlier_indices = np.where(clustering.labels_ == -1)[0]
+    return outlier_indices
+
+
+# -----------------------------
+# Topic Modeling with LDA
+# -----------------------------
+def perform_topic_modeling(documents, num_topics=3, num_top_words=5):
+    """
+    Perform topic modeling using Latent Dirichlet Allocation (LDA).
+
+    Parameters:
+        documents (list of str): List of document texts.
+        num_topics (int): Number of topics for LDA.
+        num_top_words (int): Number of top words to display per topic.
+
+    Returns:
+        dict: A dictionary mapping topic indices to their top words.
+    
+    References:
+    - Scikit-learn LDA: :contentReference[oaicite:4]{index=4}
+    """
+    vectorizer = CountVectorizer(stop_words='english')
+    dtm = vectorizer.fit_transform(documents)
+    
+    lda_model = LatentDirichletAllocation(n_components=num_topics, random_state=42)
+    lda_model.fit(dtm)
+    
+    feature_names = vectorizer.get_feature_names_out()
+    topics = {}
+    for topic_idx, topic in enumerate(lda_model.components_):
+        top_features_ind = topic.argsort()[::-1][:num_top_words]
+        top_features = [feature_names[i] for i in top_features_ind]
+        topics[topic_idx] = top_features
+    return topics
+
+
+# -----------------------------
+# Basic Text Feature Analysis
+# -----------------------------
+def text_features(text):
+    """
+    Compute basic text features:
+    - Word count
+    - Sentence count
+    - Average sentence length (in words)
+    - Average word length
+
+    Parameters:
+        text (str): The document text.
+
+    Returns:
+        dict: Computed features.
+    """
+    words = text.split()
+    word_count = len(words)
+    sentences = nltk.sent_tokenize(text)
+    sentence_count = len(sentences)
+    avg_sentence_length = word_count / sentence_count if sentence_count > 0 else 0
+    avg_word_length = sum(len(word) for word in words) / word_count if word_count > 0 else 0
+    return {
+        "word_count": word_count,
+        "sentence_count": sentence_count,
+        "avg_sentence_length": avg_sentence_length,
+        "avg_word_length": avg_word_length
+    }
+
+
+# -----------------------------
+# Model Loading Functions
+# -----------------------------
+def load_gpt2_model(model_name="gpt2"):
+    """Load the GPT-2 model and tokenizer."""
+    try:
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+        tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+        logging.info(f"Loaded GPT-2 model: {model_name}")
+        return model, tokenizer
+    except Exception as e:
+        logging.error(f"Error loading GPT-2: {e}")
+        sys.exit(1)
+
+
+def load_sentence_transformer(model_name='all-MiniLM-L6-v2'):
+    """Load the Sentence Transformer model for generating embeddings."""
+    try:
+        sbert_model = SentenceTransformer(model_name)
+        logging.info(f"Loaded Sentence Transformer model: {model_name}")
+        return sbert_model
+    except Exception as e:
+        logging.error(f"Error loading Sentence Transformer: {e}")
+        sys.exit(1)
+
+
+# -----------------------------
+# Main Routine
+# -----------------------------
+def main():
+    # Dummy documents for demonstration (in production, replace with actual data)
+    documents = [
+        "The stock market crashed today as investors lost confidence in tech stocks.",
+        "Artificial intelligence and machine learning are transforming industries.",
+        "Local sports team wins the championship after a thrilling match.",
+        "Political debates heat up as the elections draw near.",
+        "Advances in medicine are leading to improved healthcare outcomes.",
+        "A new tech startup is disrupting the e-commerce space.",
+        "The art exhibition showcased modern interpretations of classical works.",
+        "Weather forecasts predict heavy rain and potential flooding this weekend.",
+        "The novel's complex narrative explores themes of identity and isolation.",
+        "Environmental activists protest against deforestation and climate change."
+    ]
+
+    # Load models
+    gpt2_model, gpt2_tokenizer = load_gpt2_model()
+    sbert_model = load_sentence_transformer()
+
+    # -----------------------------
+    # 1. Perplexity Calculation
+    # -----------------------------
+    logging.info("Calculating perplexity scores for each document...")
+    perplexity_scores = []
+    for idx, doc in enumerate(documents):
+        ppl = calculate_perplexity(doc, gpt2_model, gpt2_tokenizer)
+        perplexity_scores.append(ppl)
+        logging.info(f"Doc {idx+1}: Perplexity = {ppl:.2f}")
+
+    # -----------------------------
+    # 2. Embedding-Based Outlier Detection
+    # -----------------------------
+    logging.info("Generating document embeddings...")
+    embeddings = sbert_model.encode(documents)
+    outlier_indices = detect_outliers(embeddings, eps=0.8, min_samples=2)
+    if len(outlier_indices) > 0:
+        logging.info(f"Detected outlier document indices: {outlier_indices.tolist()}")
+    else:
+        logging.info("No outliers detected based on embeddings.")
+
+    # -----------------------------
+    # 3. Topic Modeling with LDA
+    # -----------------------------
+    logging.info("Performing topic modeling...")
+    topics = perform_topic_modeling(documents, num_topics=3, num_top_words=5)
+    for topic_idx, top_words in topics.items():
+        logging.info(f"Topic #{topic_idx+1}: {', '.join(top_words)}")
+
+    # -----------------------------
+    # 4. Basic Text Feature Analysis
+    # -----------------------------
+    logging.info("Computing text features for each document...")
+    features_list = [text_features(doc) for doc in documents]
+    features_df = pd.DataFrame(features_list, index=[f"Doc {i+1}" for i in range(len(documents))])
+    features_df["perplexity"] = perplexity_scores
+    features_df["is_outlier"] = ["Yes" if i in outlier_indices else "No" for i in range(len(documents))]
+    logging.info("Text feature analysis complete. Summary:")
+    logging.info(f"\n{features_df}")
+
+    # Optionally, save the analysis to a CSV file (uncomment if needed)
+    output_csv = "document_analysis.csv"
+    features_df.to_csv(output_csv)
+    logging.info(f"Saved text feature analysis to {output_csv}")
+
+    # -----------------------------
+    # 5. Visualization Example
+    # -----------------------------
+    plt.figure(figsize=(10, 6))
+    features_df['word_count'].plot(kind='bar')
+    plt.title("Word Count per Document")
+    plt.xlabel("Document")
+    plt.ylabel("Word Count")
+    plt.tight_layout()
+    output_plot = "word_count_per_document.png"
+    plt.savefig(output_plot)
+    logging.info(f"Saved word count plot to {output_plot}")
+    plt.close()
+
+if __name__ == "__main__":
+    main()
