@@ -1,280 +1,177 @@
-#!/usr/bin/env python3
-"""
-Production-Ready Document Analysis Script
-
-This script performs the following analyses on a collection of documents:
-1. Perplexity scoring using GPT-2 to flag statistically unusual documents.
-2. Embedding-based outlier detection using Sentence Transformers and DBSCAN.
-3. Topic modeling with Latent Dirichlet Allocation (LDA) to extract prevalent topics.
-4. Basic text feature analysis (e.g., word count, sentence count, average sentence length).
-
-Dependencies:
-- transformers
-- torch
-- sentence_transformers
-- scikit-learn
-- nltk
-- pandas
-- matplotlib
-
-References:
-- HuggingFace Transformers for perplexity: :contentReference[oaicite:0]{index=0}
-- Sentence Transformers: https://www.sbert.net/
-- Scikit-learn LDA: :contentReference[oaicite:1]{index=1}
-- NLTK Tokenization: https://www.nltk.org/
-"""
-
-import logging
-import sys
 import os
-import numpy as np
+import subprocess
+import sys
+import json
+import platform
+import time
 import pandas as pd
-import matplotlib.pyplot as plt
-import nltk
-from sklearn.cluster import DBSCAN
-from sklearn.decomposition import LatentDirichletAllocation
-from sklearn.feature_extraction.text import CountVectorizer
 
-import torch
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
-from sentence_transformers import SentenceTransformer
-
-# Configure logging for production quality
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-
-# Download necessary NLTK data (only once; production systems may pre-download this)
-nltk.download('punkt', quiet=True)
-
-# -----------------------------
-# Perplexity Calculation Function
-# -----------------------------
-def calculate_perplexity(text, model, tokenizer, max_length=1024):
+def find_virtualenvs(root_dir):
     """
-    Compute perplexity for the given text using a pre-trained language model.
-    Lower perplexity indicates a text that is more in-distribution.
-
-    Parameters:
-        text (str): The document text.
-        model: Pre-trained language model (e.g., GPT-2).
-        tokenizer: Corresponding tokenizer.
-        max_length (int): Maximum token length for truncation.
-
+    Recursively search for virtual environments in the given root directory.
+    A folder is considered a virtual environment if it contains a Python executable.
+    
     Returns:
-        float: Perplexity score.
+        A list of tuples (env_name, env_path, python_exe) where:
+         - env_name is the name of the environment (folder name)
+         - env_path is the full path of the environment root
+         - python_exe is the full path to the python executable in that environment.
+    """
+    envs = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # Check for Python executable in expected locations.
+        if platform.system() == "Windows":
+            candidate = os.path.join(dirpath, "Scripts", "python.exe")
+        else:
+            candidate = os.path.join(dirpath, "bin", "python")
+        
+        if os.path.isfile(candidate):
+            env_name = os.path.basename(dirpath)
+            envs.append((env_name, dirpath, candidate))
+            # Do not search subdirectories of a found environment.
+            dirnames.clear()  # Prevent descending further in this branch.
+    return envs
+
+def get_env_package_info(python_exe):
+    """
+    Runs a Python snippet in the given environment to retrieve:
+      - Python version, installation location, environment location.
+      - For each installed package (using pkg_resources.working_set):
+          Package name, last accessed time and days since last accessed.
     
-    References:
-    - HuggingFace Transformers: :contentReference[oaicite:2]{index=2}
-    """
-    try:
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
-        with torch.no_grad():
-            outputs = model(**inputs, labels=inputs["input_ids"])
-            loss = outputs.loss
-        perplexity = torch.exp(loss)
-        return perplexity.item()
-    except Exception as e:
-        logging.error(f"Error calculating perplexity: {e}")
-        return float('inf')
-
-
-# -----------------------------
-# Embedding-Based Outlier Detection
-# -----------------------------
-def detect_outliers(embeddings, eps=0.8, min_samples=2):
-    """
-    Identify outliers using DBSCAN clustering on document embeddings.
-    Documents labeled as noise (-1) are considered unusual.
-
-    Parameters:
-        embeddings (np.ndarray): Array of document embeddings.
-        eps (float): DBSCAN eps parameter.
-        min_samples (int): DBSCAN min_samples parameter.
-
     Returns:
-        np.ndarray: Indices of outlier documents.
-    
-    References:
-    - DBSCAN in scikit-learn: :contentReference[oaicite:3]{index=3}
+        A dictionary with keys 'env_info' and 'packages' if successful, else None.
     """
-    clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(embeddings)
-    outlier_indices = np.where(clustering.labels_ == -1)[0]
-    return outlier_indices
-
-
-# -----------------------------
-# Topic Modeling with LDA
-# -----------------------------
-def perform_topic_modeling(documents, num_topics=3, num_top_words=5):
-    """
-    Perform topic modeling using Latent Dirichlet Allocation (LDA).
-
-    Parameters:
-        documents (list of str): List of document texts.
-        num_topics (int): Number of topics for LDA.
-        num_top_words (int): Number of top words to display per topic.
-
-    Returns:
-        dict: A dictionary mapping topic indices to their top words.
-    
-    References:
-    - Scikit-learn LDA: :contentReference[oaicite:4]{index=4}
-    """
-    vectorizer = CountVectorizer(stop_words='english')
-    dtm = vectorizer.fit_transform(documents)
-    
-    lda_model = LatentDirichletAllocation(n_components=num_topics, random_state=42)
-    lda_model.fit(dtm)
-    
-    feature_names = vectorizer.get_feature_names_out()
-    topics = {}
-    for topic_idx, topic in enumerate(lda_model.components_):
-        top_features_ind = topic.argsort()[::-1][:num_top_words]
-        top_features = [feature_names[i] for i in top_features_ind]
-        topics[topic_idx] = top_features
-    return topics
-
-
-# -----------------------------
-# Basic Text Feature Analysis
-# -----------------------------
-def text_features(text):
-    """
-    Compute basic text features:
-    - Word count
-    - Sentence count
-    - Average sentence length (in words)
-    - Average word length
-
-    Parameters:
-        text (str): The document text.
-
-    Returns:
-        dict: Computed features.
-    """
-    words = text.split()
-    word_count = len(words)
-    sentences = nltk.sent_tokenize(text)
-    sentence_count = len(sentences)
-    avg_sentence_length = word_count / sentence_count if sentence_count > 0 else 0
-    avg_word_length = sum(len(word) for word in words) / word_count if word_count > 0 else 0
-    return {
-        "word_count": word_count,
-        "sentence_count": sentence_count,
-        "avg_sentence_length": avg_sentence_length,
-        "avg_word_length": avg_word_length
-    }
-
-
-# -----------------------------
-# Model Loading Functions
-# -----------------------------
-def load_gpt2_model(model_name="gpt2"):
-    """Load the GPT-2 model and tokenizer."""
-    try:
-        model = GPT2LMHeadModel.from_pretrained(model_name)
-        tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-        logging.info(f"Loaded GPT-2 model: {model_name}")
-        return model, tokenizer
-    except Exception as e:
-        logging.error(f"Error loading GPT-2: {e}")
-        sys.exit(1)
-
-
-def load_sentence_transformer(model_name='all-MiniLM-L6-v2'):
-    """Load the Sentence Transformer model for generating embeddings."""
-    try:
-        sbert_model = SentenceTransformer(model_name)
-        logging.info(f"Loaded Sentence Transformer model: {model_name}")
-        return sbert_model
-    except Exception as e:
-        logging.error(f"Error loading Sentence Transformer: {e}")
-        sys.exit(1)
-
-
-# -----------------------------
-# Main Routine
-# -----------------------------
-def main():
-    # Dummy documents for demonstration (in production, replace with actual data)
-    documents = [
-        "The stock market crashed today as investors lost confidence in tech stocks.",
-        "Artificial intelligence and machine learning are transforming industries.",
-        "Local sports team wins the championship after a thrilling match.",
-        "Political debates heat up as the elections draw near.",
-        "Advances in medicine are leading to improved healthcare outcomes.",
-        "A new tech startup is disrupting the e-commerce space.",
-        "The art exhibition showcased modern interpretations of classical works.",
-        "Weather forecasts predict heavy rain and potential flooding this weekend.",
-        "The novel's complex narrative explores themes of identity and isolation.",
-        "Environmental activists protest against deforestation and climate change."
-    ]
-
-    # Load models
-    gpt2_model, gpt2_tokenizer = load_gpt2_model()
-    sbert_model = load_sentence_transformer()
-
-    # -----------------------------
-    # 1. Perplexity Calculation
-    # -----------------------------
-    logging.info("Calculating perplexity scores for each document...")
-    perplexity_scores = []
-    for idx, doc in enumerate(documents):
-        ppl = calculate_perplexity(doc, gpt2_model, gpt2_tokenizer)
-        perplexity_scores.append(ppl)
-        logging.info(f"Doc {idx+1}: Perplexity = {ppl:.2f}")
-
-    # -----------------------------
-    # 2. Embedding-Based Outlier Detection
-    # -----------------------------
-    logging.info("Generating document embeddings...")
-    embeddings = sbert_model.encode(documents)
-    outlier_indices = detect_outliers(embeddings, eps=0.8, min_samples=2)
-    if len(outlier_indices) > 0:
-        logging.info(f"Detected outlier document indices: {outlier_indices.tolist()}")
+    code = r"""
+import pkg_resources, os, time, json, sys
+now = time.time()
+env_info = {
+    "Python_Version": sys.version.split()[0],
+    "Python_Installation_Location": sys.executable,
+    "Environment_Location": sys.prefix
+}
+packages = []
+for dist in pkg_resources.working_set:
+    package_name = dist.project_name
+    # Attempt to determine the package folder by replacing '-' with '_' in the package name.
+    package_folder = os.path.join(dist.location, package_name.replace('-', '_'))
+    if os.path.exists(package_folder):
+        stats = os.stat(package_folder)
+        last_access_timestamp = stats.st_atime
+        last_access_time = time.ctime(last_access_timestamp)
+        days_since_last_access = round((now - last_access_timestamp)/(24*3600), 2)
     else:
-        logging.info("No outliers detected based on embeddings.")
+        last_access_time = "Package folder not found."
+        days_since_last_access = None
+    packages.append({
+        "Package": package_name,
+        "Last_Access_Time": last_access_time,
+        "Days_Since_Last_Access": days_since_last_access
+    })
+result = {"env_info": env_info, "packages": packages}
+print(json.dumps(result))
+"""
+    try:
+        proc = subprocess.run(
+            [python_exe, "-c", code],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        data = json.loads(proc.stdout)
+        return data
+    except Exception as e:
+        print(f"Error retrieving info using {python_exe}: {e}")
+        return None
 
-    # -----------------------------
-    # 3. Topic Modeling with LDA
-    # -----------------------------
-    logging.info("Performing topic modeling...")
-    topics = perform_topic_modeling(documents, num_topics=3, num_top_words=5)
-    for topic_idx, top_words in topics.items():
-        logging.info(f"Topic #{topic_idx+1}: {', '.join(top_words)}")
+def run_pip_check(python_exe):
+    """
+    Runs 'pip check' in the given environment.
+    Returns the stdout (and stderr if any) from pip check.
+    """
+    try:
+        proc = subprocess.run(
+            [python_exe, "-m", "pip", "check"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        # If pip check finds no issues, it outputs "No broken requirements found."
+        output = proc.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        # pip check returns non-zero exit code if issues are found.
+        output = e.stdout.strip() + "\n" + e.stderr.strip()
+    except Exception as e:
+        output = f"Error running pip check: {e}"
+    return output
 
-    # -----------------------------
-    # 4. Basic Text Feature Analysis
-    # -----------------------------
-    logging.info("Computing text features for each document...")
-    features_list = [text_features(doc) for doc in documents]
-    features_df = pd.DataFrame(features_list, index=[f"Doc {i+1}" for i in range(len(documents))])
-    features_df["perplexity"] = perplexity_scores
-    features_df["is_outlier"] = ["Yes" if i in outlier_indices else "No" for i in range(len(documents))]
-    logging.info("Text feature analysis complete. Summary:")
-    logging.info(f"\n{features_df}")
-
-    # Optionally, save the analysis to a CSV file (uncomment if needed)
-    output_csv = "document_analysis.csv"
-    features_df.to_csv(output_csv)
-    logging.info(f"Saved text feature analysis to {output_csv}")
-
-    # -----------------------------
-    # 5. Visualization Example
-    # -----------------------------
-    plt.figure(figsize=(10, 6))
-    features_df['word_count'].plot(kind='bar')
-    plt.title("Word Count per Document")
-    plt.xlabel("Document")
-    plt.ylabel("Word Count")
-    plt.tight_layout()
-    output_plot = "word_count_per_document.png"
-    plt.savefig(output_plot)
-    logging.info(f"Saved word count plot to {output_plot}")
-    plt.close()
+def main():
+    # Prompt the user for the folder that contains your virtual environments.
+    parent_env_dir = input("Enter the full path to the folder containing your virtual environments: ").strip()
+    if not os.path.isdir(parent_env_dir):
+        print(f"The directory {parent_env_dir} does not exist.")
+        sys.exit(1)
+    
+    # Find all virtual environments under the specified parent directory.
+    environments = find_virtualenvs(parent_env_dir)
+    if not environments:
+        print("No virtual environments found in the specified folder.")
+        sys.exit(1)
+    
+    all_package_rows = []
+    all_env_rows = []
+    
+    for env_name, env_path, python_exe in environments:
+        print(f"Processing environment: {env_name} at {env_path}")
+        
+        # Get package details from the environment.
+        env_data = get_env_package_info(python_exe)
+        if env_data:
+            env_info = env_data.get("env_info", {})
+            packages = env_data.get("packages", [])
+            
+            for pkg in packages:
+                row = {
+                    "Environment Name": env_name,
+                    "Python Version": env_info.get("Python_Version", ""),
+                    "Python Installation Location": env_info.get("Python_Installation_Location", ""),
+                    "Environment Location": env_info.get("Environment_Location", ""),
+                    "Package": pkg.get("Package", ""),
+                    "Last Access Time": pkg.get("Last_Access_Time", ""),
+                    "Days Since Last Access": pkg.get("Days_Since_Last_Access", "")
+                }
+                all_package_rows.append(row)
+        
+        # Determine the environment's last accessed date using the env folder.
+        try:
+            stats = os.stat(env_path)
+            env_last_access = time.ctime(stats.st_atime)
+        except Exception as e:
+            env_last_access = f"Error: {e}"
+        
+        # Run pip check in the environment.
+        pip_check_output = run_pip_check(python_exe)
+        
+        env_row = {
+            "Environment Name": env_name,
+            "Environment Last Access Time": env_last_access,
+            "Pip Check Output": pip_check_output
+        }
+        all_env_rows.append(env_row)
+    
+    # Create DataFrames.
+    df_packages = pd.DataFrame(all_package_rows)
+    df_envs = pd.DataFrame(all_env_rows)
+    
+    print("\nAggregated Package Info Across Virtual Environments:")
+    print(df_packages)
+    print("\nEnvironment-Level Info (Last Access and Pip Check):")
+    print(df_envs)
+    
+    # Save to CSV files.
+    df_packages.to_csv("pip_envs_packages_info.csv", index=False)
+    df_envs.to_csv("pip_envs_env_info.csv", index=False)
+    print("\nCSV files generated: 'pip_envs_packages_info.csv' and 'pip_envs_env_info.csv'.")
 
 if __name__ == "__main__":
     main()
