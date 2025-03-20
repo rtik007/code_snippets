@@ -1,0 +1,48 @@
+## PowerShell comand to read each line from requirements file and pip install on a loop
+Get-Content requirements.txt | ForEach-Object {
+    pip install $_
+    if (!$?) {
+        Write-Host "Failed to install $_, moving on..."
+    }
+}
+
+## PowerShell comand to read each line from requirements file and pip install on a loop and
+## capture warnings or errors from each pip install command
+## Make sure you have a logs directory
+New-Item -ItemType Directory -Force -Path .\logs | Out-Null
+
+Get-Content requirements.txt | ForEach-Object {
+    ## Capture the entire output (stdout + stderr) of pip install
+    $output = pip install $_ 2>&1
+
+    ## Check if pip install succeeded
+    if (!$?) {
+        ## If pip install failed, log everything
+        $output | Out-File .\logs\install.log -Append
+        "----- Failed to install $_ -----" | Out-File .\logs\install.log -Append
+    } else {
+        ## If pip install succeeded, check for 'WARNING' or 'ERROR' in the output
+        if ($output -match 'WARNING|ERROR') {
+            # Write the entire captured output to the log
+            $output | Out-File .\logs\install.log -Append
+            "----- Warnings/Errors found for $_ -----" | Out-File .\logs\install.log -Append
+        }
+    }
+}
+
+
+## bash comand to execute in Jupyter notebook to read each line from requirements file and pip install on a loop
+while read -r package; do
+    pip install "$package" || echo "Failed to install $package, moving on..."
+done < requirements.txt
+
+
+## Windows CMD (not PowerShell or Bash)
+## You would put that into a file named, say, install_packages.bat, and then run it in CMD (not in PowerShell)
+@echo off
+for /f "usebackq tokens=*" %%a in ("requirements.txt") do (
+    pip install %%a
+    if errorlevel 1 (
+        echo Failed to install %%a, moving on...
+    )
+)
