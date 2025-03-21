@@ -1,3 +1,14 @@
+"""
++-------------------------------+----------------------------------------------------------+
+| Feature                       | Description                                              |
++-------------------------------+----------------------------------------------------------+
+| 🔍 Virtual environment detection | Automatically detects venvs in a directory              |
+| 🐍 Python environment info       | Gets version and location details                      |
+| 📦 Package activity info        | Shows last access time per package                     |
+| 📊 Aggregated output            | Consolidates results using pandas                      |
+| 💾 (Optional) Save to CSV       | Easy export for further analysis                       |
++-------------------------------+----------------------------------------------------------+
+"""
 import os
 import subprocess
 import sys
