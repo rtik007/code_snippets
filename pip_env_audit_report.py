@@ -1,3 +1,25 @@
+'''
+#########################################################################################################################################
+Virtual Environment Discovery:
+    Recursively scans a directory for virtual environments by checking for python executables in expected locations (bin/python for Unix-like systems and Scripts/python.exe for Windows).
+    Package Inspection:
+
+Uses pkg_resources to gather package names.
+    Attempts to determine last access time for each package folder (not always reliable, but provides useful clues).
+
+Environment Metadata:
+    Captures Python version, installation path, and environment location.
+
+Health Check:
+    Uses pip check to find broken dependencies or unmet requirements.
+
+Output:
+    Aggregates the collected data into two CSV files:
+    pip_envs_packages_info.csv: Detailed per-package info.
+    pip_envs_env_info.csv: Per-environment summary with pip check results.
+#########################################################################################################################################
+'''
+
 import os
 import subprocess
 import sys
