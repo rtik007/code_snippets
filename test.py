@@ -1,6 +1,5 @@
 import ipywidgets as widgets
 from IPython.display import display, HTML, Javascript
-from your_module import connect  # Replace with actual import
 
 # Input and submit UI
 question_box = widgets.Textarea(
