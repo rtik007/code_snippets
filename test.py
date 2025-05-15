@@ -2,9 +2,6 @@ import ipywidgets as widgets
 from IPython.display import display, HTML, Javascript
 from your_module import connect  # Replace with actual import
 
-# Connect to endpoint
-my_endpoint = connect('gemini-2.0-flash-001', config=GCP_CONFIG)
-
 # Input and submit UI
 question_box = widgets.Textarea(
     value='',
