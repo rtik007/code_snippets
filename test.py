@@ -1,65 +1,182 @@
-import os
-import warnings
+import importlib
 import csv
 
-# List all the models you want to load
-model_names = [
-    "llama-3.2-1B",
-    "llama-3.2-7B",
-    "llama-3.2-13B",
-    # …add more as needed
-]
+# Mapping of package names to their importable module names
+packages = {
+    "absl_py": "absl",
+    "apscheduler": "apscheduler",
+    "argon2_cffi": "argon2",
+    "argon2_cffi_bindings": "argon2._ffi",  # internal binding, typically not imported directly
+    "arize_phoenix": "arize_phoenix",
+    "arize_phoenix_client": "arize_phoenix_client",
+    "arize_phoenix_evals": "arize_phoenix_evals",
+    "arize_phoenix_otel": "arize_phoenix_otel",
+    "authlib": "authlib",
+    "azure_core": "azure.core",
+    "azure_identity": "azure.identity",
+    "beautifulsoup4": "bs4",
+    "bottleneck": "bottleneck",
+    "chroma_hnswlib": "chroma_hnswlib",
+    "chromadb": "chromadb",
+    "colbert_ai": "colbert_ai",
+    "deprecated": "deprecated",
+    "dnspython": "dns",
+    "docassemble": "docassemble",
+    "dspy_ai": "dspy_ai",
+    "faiss_cpu": "faiss",
+    "flask": "flask",
+    "fonttools": "fonttools",
+    "gitpython": "git",
+    "google_api_core": "google.api_core",
+    "google_api_generativelanguage": "google.ai.generativelanguage",
+    "google_api_python_client": "googleapiclient",
+    "google_auth": "google.auth",
+    "google_cloud_aiplatform": "google.cloud.aiplatform",
+    "google_cloud_bigquery": "google.cloud.bigquery",
+    "google_cloud_core": "google.cloud",
+    "google_cloud_discoveryengine": "google.cloud.discoveryengine",
+    "google_cloud_documentai": "google.cloud.documentai",
+    "google_cloud_documentai_toolbox": "google.cloud.documentai_toolbox",
+    "google_cloud_resource_manager": "google.cloud.resource_manager",
+    "google_cloud_storage": "google.cloud.storage",
+    "google_cloud_vision": "google.cloud.vision",
+    "google_genai": "google.genai",
+    "google_generativeai": "google.generativeai",
+    "google_resumable_media": "google.resumable_media",
+    "googleapis_common_protos": "googleapis_common_protos",
+    "graphql_core": "graphql",
+    "grpc_google_iam_v1": "google.iam.v1",
+    "grpcio": "grpc",
+    "grpcio_status": "grpc_status",
+    "impyla": "impyla",
+    "ipython": "IPython",
+    "jinja2": "jinja2",
+    "jsonpath_python": "jsonpath_ng",
+    "langgraph_checkpoint": "langgraph_checkpoint",
+    "langgraph_prebuilt": "langgraph_prebuilt",
+    "llama_index_agent_openai": "llama_index.agent.openai",
+    "llama_index_cli": "llama_index.cli",
+    "llama_index_core": "llama_index.core",
+    "llama_index_embeddings_adapter": "llama_index.embeddings.adapter",
+    "llama_index_embeddings_gemini": "llama_index.embeddings.gemini",
+    "llama_index_embeddings_huggingface": "llama_index.embeddings.huggingface",
+    "llama_index_embeddings_instructor": "llama_index.embeddings.instructor",
+    "llama_index_embeddings_langchain": "llama_index.embeddings.langchain",
+    "llama_index_embeddings_openai": "llama_index.embeddings.openai",
+    "llama_index_embeddings_vertex": "llama_index.embeddings.vertex",
+    "llama_index_finetuning": "llama_index.finetuning",
+    "llama_index_indices_managed_llama_cloud": "llama_index.indices.managed.llama_cloud",
+    "llama_index_indices_managed_vertexai": "llama_index.indices.managed.vertexai",
+    "llama_index_llms_azure_openai": "llama_index.llms.azure_openai",
+    "llama_index_llms_gemini": "llama_index.llms.gemini",
+    "llama_index_llms_huggingface": "llama_index.llms.huggingface",
+    "llama_index_llms_langchain": "llama_index.llms.langchain",
+    "llama_index_llms_mistralai": "llama_index.llms.mistralai",
+    "llama_index_llms_openai": "llama_index.llms.openai",
+    "llama_index_llms_openai_like": "llama_index.llms.openai_like",
+    "llama_index_llms_vertex": "llama_index.llms.vertex",
+    "llama_index_multi_modal_llms_openai": "llama_index.multi_modal.llms_openai",
+    "llama_index_postprocessor_cohere_rerank": "llama_index.postprocessor.cohere_rerank",
+    "llama_index_program_openai": "llama_index.program.openai",
+    "llama_index_question_gen_openai": "llama_index.question_gen.openai",
+    "llama_index_readers_file": "llama_index.readers.file",
+    "llama_index_readers_llama_parse": "llama_index.readers.llama_parse",
+    "llama_index_retrievers_bm25": "llama_index.retrievers.bm25",
+    "llama_index_retrievers_vertexai_search": "llama_index.retrievers.vertexai_search",
+    "llama_index_vector_stores_elasticsearch": "llama_index.vector_stores.elasticsearch",
+    "llama_index_vector_stores_faiss": "llama_index.vector_stores.faiss",
 
-# Containers to hold successfully loaded models & tokenizers
-models = {}
-tokenizers = {}
+    "mako": "mako",
+    "markdown": "markdown",
+    "markdown_it_py": "markdown_it",
+    "markupsafe": "markupsafe",
+    "mysql_connector_python": "mysql.connector",
+    # NVIDIA CUDA packages (generally not imported in Python directly, but still handled here)
+    "nvidia_nemo": "nemo",
+    "nvidia_cublas_cu12": "nvidia",
+    "nvidia_cuda_cupti_cu12": "nvidia",
+    "nvidia_cuda_nvrtc_cu12": "nvidia",
+    "nvidia_cuda_runtime_cu12": "nvidia",
+    "nvidia_cudnn_cu12": "nvidia",
+    "nvidia_cufft_cu12": "nvidia",
+    "nvidia_curand_cu12": "nvidia",
+    "nvidia_cusolver_cu12": "nvidia",
+    "nvidia_cusparse_cu12": "nvidia",
+    "nvidia_cusparselt_cu12": "nvidia",
+    "nvidia_nccl_cu12": "nvidia",
+    "nvidia_nvjitlink_cu12": "nvidia",
+    "nvidia_nvtx_cu12": "nvidia",
 
-# Prepare CSV logging
-log_file = "model_load_log.csv"
-fieldnames = ["model_name", "error", "warnings"]
-with open(log_file, mode="w", newline="", encoding="utf-8") as csvfile:
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    writer.writeheader()
+    "openai_whisper": "whisper",
+    "opencv_python": "cv2",
+    "opencv_python_headless": "cv2",
 
-    for name in model_names:
-        # prepare per‐model directory
-        model_dir = os.path.join("models", name)
-        os.makedirs(model_dir, exist_ok=True)
+    "openinference_instrumentation": "openinference.instrumentation",
+    "openinference_instrumentation_dspy": "openinference.instrumentation.dspy",
+    "openinference_instrumentation_llama_index": "openinference.instrumentation.llama_index",
+    "openinference_instrumentation_vertexai": "openinference.instrumentation.vertexai",
+    "openinference_semantic_conventions": "openinference.semantic_conventions",
 
-        print(f"Loading {name}…")
-        warnings_list = []
-        error_msg = ""
+    "opentelemetry_api": "opentelemetry.api",
+    "opentelemetry_exporter_otlp": "opentelemetry.exporter.otlp",
+    "opentelemetry_exporter_otlp_proto_common": "opentelemetry.exporter.otlp.proto.common",
+    "opentelemetry_exporter_otlp_proto_grpc": "opentelemetry.exporter.otlp.proto.grpc",
+    "opentelemetry_exporter_otlp_proto_http": "opentelemetry.exporter.otlp.proto.http",
+    "opentelemetry_instrumentation": "opentelemetry.instrumentation",
+    "opentelemetry_instrumentation_asgi": "opentelemetry.instrumentation.asgi",
+    "opentelemetry_instrumentation_fastapi": "opentelemetry.instrumentation.fastapi",
+    "opentelemetry_proto": "opentelemetry.proto",
+    "opentelemetry_sdk": "opentelemetry.sdk",
+    "opentelemetry_semantic_conventions": "opentelemetry.semantic_conventions",
+    "opentelemetry_util_http": "opentelemetry.util.http",
 
-        # capture all warnings in this block
-        with warnings.catch_warnings(record=True) as caught_warnings:
-            warnings.simplefilter("always")
+    "pdf2json": "pdf2json",
+    "pdfminer_six": "pdfminer",  # module name is 'pdfminer' not 'pdfminer.six'
+    "pillow": "PIL",
+    "proto_plus": "proto",  # importable as proto
+    "protobuf": "google.protobuf",
+    "pure_sasl": "pure_sasl",
+    "pyautogen": "pyautogen",
+    "pycryptodome": "Crypto",  # module is 'Crypto'
+    "pydantic_ai_slim": "pydantic_ai_slim",
+    "pygments": "pygments",
+    "pyjwt": "jwt",
+    "pymupdf": "fitz",
+    "pynacl": "nacl",
+    "pypika": "pypika",
+    "pystemmer": "Stemmer",
+    "pytest_xdist": "xdist",
+    "python_bidi": "bidi",
+    "python_dateutil": "dateutil",
+    "python_docx": "docx",
+    "python_dotenv": "dotenv",
+    "python_iso639": "iso639",
+    "python_json_logger": "python_json_logger",
+    "python_magic": "magic",
+    "python_oxmsg": "oxmsg",
+    "python_pptx": "pptx",
+    "pyzmq": "zmq",
+    "rapidfuzz": "rapidfuzz",
+    "rpds_py": "rpds",
+    "scikit_image": "skimage",
+    "secretstorage": "secretstorage",
+    "send2trash": "send2trash",
+    "sqlalchemy": "sqlalchemy",
+    "sqlean_py": "sqlean",  # assuming importable as 'sqlean'
+    "strawberry_graphql": "strawberry",
+    "tabula_py": "tabula",
+    "triton": "triton",
+    "types_html5lib": "html5lib",
+    "types_lxml": "lxml",
+    "types_python_dateutil": "dateutil",
+    "types_requests": "requests",
+    "umap_learn": "umap",
+    "unsloth": "unsloth",
+    "websocket_client": "websocket",
+    "werkzeug": "werkzeug",
+    "xlsxwriter": "xlsxwriter"
+  
+}
 
-            try:
-                model, tokenizer = load_model_from_s3(
-                    bucket=bucket_name,
-                    path_to_model=name,
-                    endpoint_url=endpoint,
-                    verify_ssl=False,
-                    local_path=model_dir,
-                    enable_debug=True
-                )
-                # store only if succeeded
-                models[name] = model
-                tokenizers[name] = tokenizer
-            except Exception as e:
-                # record the exception string
-                error_msg = str(e)
-
-            # pull out any warnings that were emitted
-            for w in caught_warnings:
-                warnings_list.append(str(w.message))
-
-        # write one row per model
-        writer.writerow({
-            "model_name": name,
-            "error": error_msg,
-            "warnings": "; ".join(warnings_list)
-        })
-
-print(f"Done loading.  Log written to {log_file}")
+results = []
 
