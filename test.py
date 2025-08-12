@@ -99,8 +99,10 @@ trainer.train()
 trainer.save_model("outputs/sft_llama3_lora")
 tokenizer.save_pretrained("outputs/sft_llama3_lora")
 
+##################
 # If your data is prompt + response
 # Replace dataset_text_field="text" with a formatting function so TRL can turn each row into a single string:
+
 def join_prompt_response(example):
     # craft the final training text per row (add separators/system tags if you use them)
     return f"{example['prompt']}{example['response']}"
@@ -114,5 +116,3 @@ trainer = SFTTrainer(
     formatting_func=join_prompt_response,  # <-- instead of dataset_text_field
     data_collator=collator,
 )
-
-
