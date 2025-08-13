@@ -1,118 +1,221 @@
-# ---- installs assumed OK; imports ----
-import torch
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    DataCollatorForLanguageModeling,
-)
-from trl import SFTTrainer, SFTConfig
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+# %%capture
+%pip install -q dspy-ai pandas numpy tqdm scikit-learn
 
-# ---------- 1) Model & tokenizer ----------
-MODEL_NAME = "meta-llama/Llama-3.2-1B"   # <- change to your checkpoint
+import os, re, random, inspect
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from sklearn.model_selection import train_test_split
+import dspy
+from dspy.teleprompt import BootstrapFewShot
 
-# Quantization config (4-bit or 8-bit). Pick ONE.
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,                    # or: load_in_8bit=True
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_compute_dtype=torch.bfloat16 # or torch.float16 if no bf16
-)
+# -----------------------------
+# CONFIG
+# -----------------------------
+INPUT_CSV  = "training_examples_compelling.csv"
+OUT_PROMPT = "improved_prompts_compelling.csv"
+OUT_PREDS  = "tuned_predictions_compelling.csv"
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token  # important for CausalLM training
-tokenizer.padding_side = "right"
+# Choose a model you have access to.
+# Make sure to set your API key in the environment if using a hosted model.
+# os.environ["OPENAI_API_KEY"] = "sk-..."   # uncomment and set if needed
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # change to your preferred model
 
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    quantization_config=bnb_config,
-    device_map="auto",
-    torch_dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-)
+random.seed(7); np.random.seed(7)
 
-# Optional: gradient checkpointing helps memory with long seqs
-model.gradient_checkpointing_enable()
+# -----------------------------
+# LOAD DATA
+# -----------------------------
+df = pd.read_csv(INPUT_CSV).fillna("")
+need = {"initial_prompt", "merchant_document_text", "is_compelling", "confidence_score", "evidence_details"}
+missing = need - set(df.columns)
+if missing:
+    raise ValueError(f"CSV must include columns: {sorted(need)}; missing: {sorted(missing)}")
 
-# ---------- 2) Prepare for k-bit LoRA & attach adapters ----------
-# This is CRUCIAL when using 4/8-bit. It sets up inputs/ln layers correctly.
-model = prepare_model_for_kbit_training(model)
+# Ensure types for labels
+df["is_compelling"] = df["is_compelling"].astype(bool)
+df["confidence_score"] = df["confidence_score"].astype(float)
 
-peft_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-    # target_modules list works well for LLaMA-family. Adjust for other models if needed.
-    target_modules=["q_proj","k_proj","v_proj","o_proj","gate_proj","up_proj","down_proj"]
-)
+# -----------------------------
+# CONFIGURE DSPy (OpenAI example; swap if needed)
+# -----------------------------
+if os.getenv("OPENAI_API_KEY"):
+    lm = dspy.OpenAI(model=MODEL, api_key=os.getenv("OPENAI_API_KEY"))
+else:
+    raise RuntimeError(
+        "Please set OPENAI_API_KEY (for OpenAI) or swap in a different dspy LM client here."
+    )
 
-model = get_peft_model(model, peft_config)
-model.print_trainable_parameters()  # should show ~1–10M trainable params, not 0
+dspy.configure(lm=lm, temperature=0.2, max_tokens=600)
 
-# ---------- 3) Data Collator ----------
-# Ensures batches have labels = input_ids with padding masked to -100.
-collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+# -----------------------------
+# SIGNATURE / MODULE (structured outputs)
+# -----------------------------
+class PhotoEmailEvidenceSignature(dspy.Signature):
+    """Does the merchant data provide photographic evidence such as a copy of an ID or email correspondence between the merchant and cardholder?
+    If none of these exist, then the evidence is not compelling."""
+    merchant_document_text = dspy.InputField(desc="Extracted text from merchant documents")
+    is_compelling = dspy.OutputField(desc="Whether photographic or email evidence is found")
+    confidence_score = dspy.OutputField(desc="Confidence score between 0 and 1")
+    evidence_details = dspy.OutputField(desc="Specific evidence that was found")
 
-# ---------- 4) Trainer config (new TRL style) ----------
-sft_config = SFTConfig(
-    output_dir="outputs/sft_llama3",
-    dataset_text_field="text",   # <- your dataset column with the training text
-    max_seq_length=2048,
-    packing=False,               # True to pack multiple samples per sequence
+class EvidenceModule(dspy.Module):
+    def __init__(self):
+        super().__init__()
+        self.step = dspy.Predict(PhotoEmailEvidenceSignature)
+    def forward(self, merchant_document_text):
+        return self.step(merchant_document_text=merchant_document_text)
 
-    # TrainingArguments fields:
-    num_train_epochs=1,
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    gradient_accumulation_steps=8,
-    learning_rate=2e-4,          # LoRA on small models can use higher LR; tune as needed
-    warmup_ratio=0.03,
-    weight_decay=0.0,
-    logging_steps=10,
-    save_steps=500,
-    evaluation_strategy="steps",
-    eval_steps=500,
-    lr_scheduler_type="cosine",
-    bf16=True,                   # or fp16=True if no bf16
-    report_to="none",
-)
+# -----------------------------
+# HELPERS
+# -----------------------------
+def make_examples(rows: pd.DataFrame):
+    exs = []
+    for _, r in rows.iterrows():
+        ex = dspy.Example(
+            merchant_document_text=str(r["merchant_document_text"]),
+            is_compelling=str(bool(r["is_compelling"])),
+            confidence_score=str(float(r["confidence_score"])),
+            evidence_details=str(r["evidence_details"])
+        ).with_inputs("merchant_document_text")
+        exs.append(ex)
+    return exs
 
-# ---------- 5) Build trainer ----------
-# dataset_dict must be a HF Datasets dict with "train" and (optionally) "test" splits.
-trainer = SFTTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    args=sft_config,
-    train_dataset=dataset_dict["train"],
-    eval_dataset=dataset_dict.get("test"),
-    data_collator=collator,      # guarantees `labels` are present
-)
+def parse_bool(x: str):
+    x = str(x).strip().lower()
+    return x in {"true", "yes", "1", "y", "t"}
 
-# ---------- 6) Train ----------
-trainer.train()
+def parse_float(x: str):
+    s = str(x)
+    m = re.search(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", s)
+    try:
+        return float(m.group(0)) if m else 0.0
+    except:
+        return 0.0
 
-# ---------- 7) Save adapter ----------
-# (Saves only LoRA weights; base model remains separate.)
-trainer.save_model("outputs/sft_llama3_lora")
-tokenizer.save_pretrained("outputs/sft_llama3_lora")
+# Combined metric: boolean accuracy (40%) + confidence proximity (30%) + evidence F1 (30%)
+def metric_fn(example, pred):
+    gold_bool = parse_bool(example.is_compelling)
+    pred_bool = parse_bool(getattr(pred, "is_compelling", ""))
+    acc = 1.0 if gold_bool == pred_bool else 0.0
 
-##################
-# If your data is prompt + response
-# Replace dataset_text_field="text" with a formatting function so TRL can turn each row into a single string:
+    gold_c = parse_float(example.confidence_score)
+    pred_c = max(0.0, min(1.0, parse_float(getattr(pred, "confidence_score", "0"))))
+    conf_score = 1.0 - min(1.0, abs(gold_c - pred_c))
 
-def join_prompt_response(example):
-    # craft the final training text per row (add separators/system tags if you use them)
-    return f"{example['prompt']}{example['response']}"
+    g = set(str(example.evidence_details).lower().split())
+    p = set(str(getattr(pred, "evidence_details", "")).lower().split())
+    inter = len(g & p); prec = inter / (len(p) + 1e-9); rec = inter / (len(g) + 1e-9)
+    f1 = 0.0 if (prec + rec) == 0 else 2*prec*rec/(prec+rec)
 
-trainer = SFTTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    args=sft_config,
-    train_dataset=dataset_dict["train"],
-    eval_dataset=dataset_dict.get("test"),
-    formatting_func=join_prompt_response,  # <-- instead of dataset_text_field
-    data_collator=collator,
-)
+    return 0.4*acc + 0.3*conf_score + 0.3*f1
+
+# --- FIX #1: version‑compatible compile wrapper ---
+import inspect
+def compile_with_compat(teleprompter, student, trainset, devset):
+    sig = inspect.signature(teleprompter.compile)
+    params = set(sig.parameters.keys())
+    if "valset" in params:
+        return teleprompter.compile(student=student, trainset=trainset, valset=devset)
+    if "devset" in params:
+        return teleprompter.compile(student=student, trainset=trainset, devset=devset)
+    if "validset" in params:
+        return teleprompter.compile(student=student, trainset=trainset, validset=devset)
+    return teleprompter.compile(student=student, trainset=trainset)
+
+# --- FIX #2: safe prompt builder (no backslashes inside f‑string expressions) ---
+def build_prompt_string(teleprompter_obj, program_obj):
+    instr = PhotoEmailEvidenceSignature.__doc__.strip()
+
+    demos = (
+        getattr(teleprompter_obj, "best_demonstrations_", None)
+        or getattr(teleprompter_obj, "demonstrations_", None)
+        or getattr(program_obj, "demonstrations_", None)
+        or []
+    )
+
+    blocks = []
+    for i, ex in enumerate(demos, 1):
+        inp = getattr(ex, "merchant_document_text", getattr(ex, "inputs", {}).get("merchant_document_text", ""))
+        ic  = getattr(ex, "is_compelling",    getattr(ex, "outputs", {}).get("is_compelling", ""))
+        cs  = getattr(ex, "confidence_score", getattr(ex, "outputs", {}).get("confidence_score", ""))
+        ed  = getattr(ex, "evidence_details", getattr(ex, "outputs", {}).get("evidence_details", ""))
+
+        blocks.append(
+            f"# Example {i}\n"
+            f"Merchant document text:\n{inp}\n"
+            f"Expected outputs:\n"
+            f"is_compelling: {ic}\n"
+            f"confidence_score: {cs}\n"
+            f"evidence_details: {ed}"
+        )
+
+    examples_text = "\n\n".join(blocks) if blocks else "(teleprompter omitted examples)"
+
+    prompt = (
+        "### Instruction\n"
+        f"{instr}\n\n"
+        "### Few‑Shot Examples\n"
+        f"{examples_text}\n\n"
+        "### Now answer for a new case.\n"
+        "Merchant document text:\n"
+        "{merchant_document_text}\n\n"
+        "Return fields:\n"
+        "- is_compelling: boolean (True/False)\n"
+        "- confidence_score: number between 0 and 1\n"
+        "- evidence_details: short phrase describing the specific evidence found"
+    ).strip()
+
+    return prompt
+
+# -----------------------------
+# TRAIN / DEV SPLIT
+# -----------------------------
+train_df, dev_df = train_test_split(df, test_size=max(1, len(df)//5), random_state=7, shuffle=True)
+trainset = make_examples(train_df)
+devset   = make_examples(dev_df)
+
+# -----------------------------
+# TELEPROMPT (optimize few‑shot)
+# -----------------------------
+teleprompter = BootstrapFewShot(metric=metric_fn, max_bootstrapped_demos=6)
+program = compile_with_compat(teleprompter, EvidenceModule(), trainset, devset)
+
+# -----------------------------
+# EXTRACT & SAVE IMPROVED PROMPT
+# -----------------------------
+improved_prompt = build_prompt_string(teleprompter, program)
+pd.DataFrame([{
+    "task": "photo_email_evidence",
+    "improved_prompt": improved_prompt,
+    "n_train": len(train_df),
+    "n_dev": len(dev_df)
+}]).to_csv(OUT_PROMPT, index=False)
+
+# -----------------------------
+# RUN PREDICTIONS FOR ALL INPUTS & SAVE
+# -----------------------------
+pred_rows = []
+for _, r in df.iterrows():
+    pred = program(merchant_document_text=str(r["merchant_document_text"]))
+    pred_rows.append({
+        "merchant_document_text": r["merchant_document_text"],
+        "pred.is_compelling": getattr(pred, "is_compelling", ""),
+        "pred.confidence_score": getattr(pred, "confidence_score", ""),
+        "pred.evidence_details": getattr(pred, "evidence_details", ""),
+        "gold.is_compelling": str(bool(r["is_compelling"])),
+        "gold.confidence_score": float(r["confidence_score"]),
+        "gold.evidence_details": r["evidence_details"]
+    })
+
+pd.DataFrame(pred_rows).to_csv(OUT_PREDS, index=False)
+
+print("✅ Done")
+print(f"Saved improved prompt -> {OUT_PROMPT}")
+print(f"Saved predictions    -> {OUT_PREDS}")
+
+print("\n--- Improved Prompt (preview) ---\n")
+preview = improved_prompt[:1800]
+print(preview)
+if len(improved_prompt) > 1800:
+    print("...\n[truncated]")
