@@ -1,5 +1,8 @@
 # %%capture
-%pip install -q dspy-ai pandas numpy tqdm scikit-learn
+# 1) Ensure we do NOT use litellm anywhere
+%pip uninstall -y litellm || true
+# 2) Install only what we need
+%pip install -q dspy-ai openai pandas numpy tqdm scikit-learn
 
 import os, re, random, inspect, json
 import numpy as np
@@ -8,7 +11,6 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import precision_recall_fscore_support
 import dspy
-from dspy.teleprompt import MIPROv2  # <-- ONLY MIPROv2
 
 # -----------------------------
 # CONFIG
@@ -18,9 +20,8 @@ OUT_PROMPT = "improved_prompts_compelling.csv"
 OUT_PREDS  = "tuned_predictions_compelling.csv"
 OUT_EVAL   = "eval_and_errors_compelling.csv"
 
-# Provider/model (OpenAI example). Set your key or swap the LM client.
-# os.environ["OPENAI_API_KEY"] = "sk-..."  # uncomment & set if needed
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Use an OpenAI model (no litellm). Make sure OPENAI_API_KEY is set.
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # choose a model you have access to
 
 random.seed(7); np.random.seed(7)
 
@@ -37,13 +38,12 @@ df["is_compelling"] = df["is_compelling"].astype(bool)
 df["confidence_score"] = df["confidence_score"].astype(float)
 
 # -----------------------------
-# CONFIGURE DSPy (swap LM if needed)
+# CONFIGURE DSPy — OpenAI adapter ONLY (no litellm)
 # -----------------------------
-if os.getenv("OPENAI_API_KEY"):
-    lm = dspy.OpenAI(model=MODEL, api_key=os.getenv("OPENAI_API_KEY"))
-else:
-    raise RuntimeError("Please set OPENAI_API_KEY or replace the LM client with one you use.")
+if not os.getenv("OPENAI_API_KEY"):
+    raise RuntimeError("Please set OPENAI_API_KEY in your environment before running this cell.")
 
+lm = dspy.OpenAI(model=MODEL, api_key=os.getenv("OPENAI_API_KEY"))
 dspy.configure(lm=lm, temperature=0.2, max_tokens=700)
 
 # -----------------------------
@@ -115,7 +115,7 @@ def metric_fn(example, pred, *args):
 
     return 0.4*acc + 0.3*conf_score + 0.3*f1
 
-# Version‑compatible compile wrapper (MIPROv2.compile signature varies across versions)
+# Version‑compatible compile wrapper (MIPROv2 signature varies across versions)
 def compile_with_compat(teleprompter, student, trainset, devset):
     sig = inspect.signature(teleprompter.compile)
     params = set(sig.parameters.keys())
@@ -176,7 +176,7 @@ devset   = make_examples(dev_df)
 # -----------------------------
 # MIPROv2 — Automatic Instruction Optimizer (ONLY)
 # -----------------------------
-# Use reasonable defaults; adjust if your version supports different args.
+from dspy.teleprompt import MIPROv2
 mipro = MIPROv2(metric=metric_fn, max_iters=3, num_candidates=8, random_seed=7)
 
 # Compile with compatibility wrapper
@@ -187,7 +187,7 @@ program = compile_with_compat(mipro, EvidenceModule(), trainset, devset)
 # -----------------------------
 improved_prompt = build_prompt_string(mipro, program)
 pd.DataFrame([{
-    "optimizer": "MIPROv2",
+    "optimizer": "MIPROv2 (OpenAI adapter, no litellm)",
     "task": "photo_email_evidence",
     "improved_prompt": improved_prompt,
     "n_train": len(train_df),
@@ -247,7 +247,7 @@ errors_df = pd.DataFrame(pred_rows).sort_values(["confidence_gap", "evidence_f1"
 eval_df = pd.concat([summary_row, errors_df], ignore_index=True)
 eval_df.to_csv(OUT_EVAL, index=False)
 
-print("✅ Done with MIPROv2 only")
+print("✅ Done (MIPROv2, no litellm)")
 print(f"Saved improved prompt -> {OUT_PROMPT}")
 print(f"Saved predictions    -> {OUT_PREDS}")
 print(f"Saved eval+errors    -> {OUT_EVAL}")
