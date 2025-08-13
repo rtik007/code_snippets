@@ -94,21 +94,27 @@ def parse_float(x: str):
         return 0.0
 
 # Combined metric: boolean accuracy (40%) + confidence proximity (30%) + evidence F1 (30%)
-def metric_fn(example, pred):
+def metric_fn(example, pred, *args):
+    # Boolean accuracy
     gold_bool = parse_bool(example.is_compelling)
     pred_bool = parse_bool(getattr(pred, "is_compelling", ""))
     acc = 1.0 if gold_bool == pred_bool else 0.0
 
+    # Confidence closeness
     gold_c = parse_float(example.confidence_score)
     pred_c = max(0.0, min(1.0, parse_float(getattr(pred, "confidence_score", "0"))))
     conf_score = 1.0 - min(1.0, abs(gold_c - pred_c))
 
+    # Evidence similarity (F1)
     g = set(str(example.evidence_details).lower().split())
     p = set(str(getattr(pred, "evidence_details", "")).lower().split())
-    inter = len(g & p); prec = inter / (len(p) + 1e-9); rec = inter / (len(g) + 1e-9)
-    f1 = 0.0 if (prec + rec) == 0 else 2*prec*rec/(prec+rec)
+    inter = len(g & p)
+    prec = inter / (len(p) + 1e-9)
+    rec = inter / (len(g) + 1e-9)
+    f1 = 0.0 if (prec + rec) == 0 else 2 * prec * rec / (prec + rec)
 
-    return 0.4*acc + 0.3*conf_score + 0.3*f1
+    return 0.4 * acc + 0.3 * conf_score + 0.3 * f1
+
 
 # --- FIX #1: version‑compatible compile wrapper ---
 import inspect
