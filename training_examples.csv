@@ -1,0 +1,6 @@
+initial_prompt,input_text,ideal_output
+Summarize the input text into one concise sentence.,"The movie was incredibly well-acted and had stunning cinematography, but the plot was predictable.","Great acting and visuals, but a predictable plot."
+Summarize the input text into one concise sentence.,The new restaurant offers delicious food but suffers from slow service during peak hours.,Delicious food with slow peak-time service.
+Summarize the input text into one concise sentence.,"The book was filled with thrilling twists, although the ending felt rushed.",Thrilling story but a rushed ending.
+Summarize the input text into one concise sentence.,"The concert had an amazing atmosphere and great performances, but the sound quality was inconsistent.",Amazing concert vibe with uneven sound quality.
+Summarize the input text into one concise sentence.,"The app is user-friendly and fast, yet it lacks some essential customization options.",Fast and user-friendly app missing key customization.
