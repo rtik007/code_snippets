@@ -1,99 +1,56 @@
-import random
-import numpy as np
-# If you use PyTorch for anything else in the pipeline, import torch and set its seed as well.
-
-def train_with_optimizer(
-    optimizer_name: str,
-    metric_fn,
-    trainset,
-    devset,
-    seed: int | None = None,
-):
+def create_metric_fn(metric_option: str = "combined", weights: tuple[float, float, float] = (0.4, 0.3, 0.3)):
     """
-    Trains the EvidenceModule with the specified optimizer.
+    Returns a metric function that computes one of several possible metrics.
 
     Args:
-        optimizer_name (str): Name of the optimizer ('bootstrap', 'copro', 'miprov2', 'simba')
-        metric_fn: Metric function for evaluation
-        trainset: Training dataset
-        devset: Development/validation dataset
-        seed (int | None): Random seed for reproducibility. If None, uses random behaviour.
+        metric_option: One of {"combined", "accuracy", "confidence", "evidence"}.
+                       "combined" uses the weighted combination of the three scores.
+                       "accuracy" returns only the boolean match on `is_compelling`.
+                       "confidence" returns only the confidence closeness.
+                       "evidence" returns only the evidence‑similarity F1.
+        weights:  A 3‑tuple of weights (acc_weight, conf_weight, evidence_weight) used
+                  when metric_option == "combined".
 
     Returns:
-        tuple: (compiled_program, teleprompter)
+        A function metric_fn(example, pred, *args) that can be passed to DSPy.
     """
-    # Set Python-level seeds for reproducibility
-    if seed is not None:
-        random.seed(seed)
-        np.random.seed(seed)
-        # torch.manual_seed(seed)  # Uncomment if you use torch elsewhere
 
-    # Choose and configure the optimizer/teleprompter
-    optimizer_name = optimizer_name.lower()
-    if optimizer_name == "bootstrap":
-        # BootstrapFewShot doesn’t currently expose a seed parameter, but setting
-        # random and NumPy seeds above will make its sampling deterministic.
-        teleprompter = BootstrapFewShot(
-            metric=metric_fn,
-            max_bootstrapped_demos=6,
-            max_labeled_demos=5,
-            max_rounds=5,
-        )
-        program = compile_with_copmat(teleprompter, EvidenceModule(), trainset, devset)
+    # Normalize weights just in case
+    w_acc, w_conf, w_f1 = weights
+    total = w_acc + w_conf + w_f1
+    if total > 0:
+        w_acc /= total
+        w_conf /= total
+        w_f1 /= total
 
-    elif optimizer_name == "copro":
-        teleprompter = COPRO(
-            metric=metric_fn,
-            breadth=8,
-            depth=5,
-            init_temperature=2.0,
-            track_stats=True,
-            verbose=True,
-        )
-        eval_kwargs = {"num_threads": 1, "display_progress": True}
-        program = teleprompter.compile(
-            student=EvidenceModule(),
-            trainset=trainset,
-            devset=devset,
-            eval_kwargs=eval_kwargs,
-        )
+    def metric_fn(example, pred, *args):
+        # Boolean accuracy
+        gold_bool = parse_bool(example.is_compelling)
+        pred_bool = parse_bool(getattr(pred, "is_compelling", ""))
+        acc = 1.0 if gold_bool == pred_bool else 0.0
 
-    elif optimizer_name == "miprov2":
-        # MIPROv2 supports a seed both in its constructor and in its compile() call.
-        teleprompter = MIPROv2(
-            metric=metric_fn,
-            num_candidates=8,
-            init_temperature=2.0,
-            num_threads=8,
-            max_bootstrapped_demos=10,
-            max_labeled_demos=6,
-            seed=seed,  # set seed at construction
-        )
-        program = teleprompter.compile(
-            student=EvidenceModule(),
-            trainset=trainset,
-            valset=devset,
-            seed=seed,  # override seed for this compile run
-            minibatch=False,
-            requires_permission_to_run=False,
-        )
+        # Confidence closeness
+        gold_c = parse_float(example.confidence_score)
+        pred_c = parse_float(getattr(pred, "confidence_score", "0"))
+        pred_c = max(0.0, min(1.0, pred_c))      # clamp between 0 and 1
+        conf_score = 1.0 - min(1.0, abs(gold_c - pred_c))
 
-    elif optimizer_name == "simba":
-        teleprompter = SIMBA(
-            metric=metric_fn,
-            bsize=5,
-            max_iters=50,
-            num_trials=3,
-            init_temperature=0.8,
-            # SIMBA may or may not accept a seed; if it does, you can pass seed=seed here
-        )
-        program = teleprompter.compile(
-            student=EvidenceModule(),
-            trainset=trainset,
-            valset=devset,
-        )
+        # Evidence similarity (F1 on word overlap)
+        gold_words = set(str(example.evidence_details).lower().split())
+        pred_words = set(str(getattr(pred, "evidence_details", "")).lower().split())
+        intersection = len(gold_words & pred_words)
+        prec = intersection / (len(pred_words) + 1e-9)
+        rec  = intersection / (len(gold_words) + 1e-9)
+        evidence_f1 = 0.0 if (prec + rec) == 0 else (2 * prec * rec) / (prec + rec)
 
-    else:
-        raise ValueError(f"Unknown optimizer: {optimizer_name}. Choose from 'bootstrap', 'copro', 'miprov2', 'simba'.")
+        # Return the requested metric
+        if metric_option == "accuracy":
+            return acc
+        elif metric_option == "confidence":
+            return conf_score
+        elif metric_option == "evidence":
+            return evidence_f1
+        else:  # "combined" or any other value defaults to the weighted sum
+            return w_acc * acc + w_conf * conf_score + w_f1 * evidence_f1
 
-    return program, teleprompter
+    return metric_fn
