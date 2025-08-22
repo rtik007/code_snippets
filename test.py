@@ -1,9 +1,9 @@
 import json
 import pandas as pd
 
-# ---------- helpers ----------
+# ---------------- helpers ----------------
 def ensure_json(val):
-    """Make sure 'pages' is a list[dict], not a JSON string."""
+    """Ensure 'pages' cell is a list[dict] (parse JSON string if needed)."""
     if isinstance(val, str):
         try:
             return json.loads(val)
@@ -12,46 +12,57 @@ def ensure_json(val):
     return val if isinstance(val, list) else []
 
 def extract_text_from_page(page):
-    """Get plain text from a single page dict (joins all block texts)."""
-    texts = []
+    """Flatten text for ONE page (joins all block.layout.text)."""
+    out = []
     for block in page.get("blocks", []):
-        layout = block.get("layout", {})
-        t = layout.get("text", "")
+        t = block.get("layout", {}).get("text", "")
         if isinstance(t, str) and t:
-            texts.append(t)
-    return "\n".join(texts)
+            out.append(t)
+    return "\n".join(out)
 
-# ---------- 1) ensure pages are JSON lists ----------
+def extract_text_from_pages(pages):
+    """Flatten text for a list of pages (document-level)."""
+    if isinstance(pages, str):
+        try:
+            pages = json.loads(pages)
+        except Exception:
+            return ""
+    if not isinstance(pages, (list, tuple)):
+        return ""
+    return "\n".join(extract_text_from_page(p) for p in pages)
+
+# --------------- pipeline ----------------
+# 0) Normalize pages
 df["pages"] = df["pages"].apply(ensure_json)
 
-# ---------- 2) build page index list so explode keeps order ----------
-df["_page_idx_list"] = df["pages"].apply(lambda p: list(range(len(p))))
+# 1) Ensure we have a document-level text column
+if "text" not in df.columns:
+    df["text"] = df["pages"].apply(extract_text_from_pages)
+else:
+    # fill empties from pages if needed
+    mask = df["text"].isna() | (df["text"].astype(str).str.len() == 0)
+    df.loc[mask, "text"] = df.loc[mask, "pages"].apply(extract_text_from_pages)
 
-# ---------- 3) explode to one row per page ----------
-df_pages = df.explode(["pages", "_page_idx_list"], ignore_index=True)
-df_pages.rename(columns={"pages": "page", "_page_idx_list": "page_index"}, inplace=True)
+# 2) Keep a copy of all original columns order
+orig_cols = df.columns.tolist()
 
-# Drop rows where there was no page
-df_pages = df_pages[df_pages["page"].notna()]
+# 3) Add page index list, then explode (keeps every other column)
+df["_page_index"] = df["pages"].apply(lambda p: list(range(len(p))))
+df_pages = df.explode(["pages", "_page_index"], ignore_index=True)
 
-# ---------- 4) per-page text ----------
+# 4) Rename exploded columns & compute per-page text
+df_pages = df_pages.rename(columns={"pages": "page", "_page_index": "page_index"})
 df_pages["page_text"] = df_pages["page"].apply(extract_text_from_page)
 
-# ---------- 5) pick the columns you want to keep ----------
-# adjust '_doc_id' to your actual id column name if different
-keep_cols = [c for c in ["_doc_id", "uri", "subfolder"] if c in df_pages.columns]
-df_pages = df_pages[keep_cols + ["page_index", "page_text", "page"]]
+# 5) Reorder: all original columns first, then page fields
+#    If you don't want the big per-page JSON in the table, drop 'page' here.
+cols = orig_cols + ["page_index", "page_text", "page"]
+df_pages = df_pages[cols]
 
-# ---------- 6) sorting & quick look ----------
-df_pages = df_pages.sort_values(keep_cols + ["page_index"]).reset_index(drop=True)
+# 6) (Optional) sort by your id columns + page_index
+id_cols = [c for c in ["_doc_id", "uri", "subfolder"] if c in df_pages.columns]
+if id_cols:
+    df_pages = df_pages.sort_values(id_cols + ["page_index"]).reset_index(drop=True)
 
-# Preview
+# Done: df_pages has ALL your original columns + page_index/page/page_text
 df_pages.head(10)
-
-
-# Replace '_doc_id' with your id column if needed
-for doc_id, g in df_pages.groupby("_doc_id"):
-    print(f"\n=== Document {doc_id} ===")
-    for _, r in g.sort_values("page_index").iterrows():
-        print(f"\n--- Page {r.page_index} ---")
-        print(r.page_text)
