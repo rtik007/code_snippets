@@ -1,9 +1,10 @@
 import json
 import pandas as pd
+import re
 
-# ---------------- helpers ----------------
+# ---------- helpers ----------
 def ensure_json(val):
-    """Ensure 'pages' cell is a list[dict] (parse JSON string if needed)."""
+    """Ensure 'pages' is a list[dict] (parse JSON string if needed)."""
     if isinstance(val, str):
         try:
             return json.loads(val)
@@ -12,57 +13,86 @@ def ensure_json(val):
     return val if isinstance(val, list) else []
 
 def extract_text_from_page(page):
-    """Flatten text for ONE page (joins all block.layout.text)."""
+    """Extract human-readable text from a single page dict."""
+    # If page accidentally still a JSON string:
+    if isinstance(page, str):
+        try:
+            page = json.loads(page)
+        except Exception:
+            return ""
+    if not isinstance(page, dict):
+        return ""
     out = []
-    for block in page.get("blocks", []):
+
+    # Most common: blocks[].layout.text
+    for block in page.get("blocks", []) or []:
         t = block.get("layout", {}).get("text", "")
         if isinstance(t, str) and t:
             out.append(t)
+
+    # Fallbacks for other schemas
+    if not out:
+        for block in page.get("blocks", []) or []:
+            t = block.get("text", "")
+            if isinstance(t, str) and t:
+                out.append(t)
+    if not out:
+        for para in page.get("paragraphs", []) or []:
+            t = para.get("layout", {}).get("text", "")
+            if isinstance(t, str) and t:
+                out.append(t)
+    if not out:
+        for line in page.get("lines", []) or []:
+            t = line.get("text", "")
+            if isinstance(t, str) and t:
+                out.append(t)
+
     return "\n".join(out)
 
-def extract_text_from_pages(pages):
-    """Flatten text for a list of pages (document-level)."""
-    if isinstance(pages, str):
-        try:
-            pages = json.loads(pages)
-        except Exception:
-            return ""
-    if not isinstance(pages, (list, tuple)):
-        return ""
-    return "\n".join(extract_text_from_page(p) for p in pages)
+def normalize(s: str) -> str:
+    """Normalize text for comparison (lower, collapse whitespace)."""
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
 
-# --------------- pipeline ----------------
-# 0) Normalize pages
+# ---------- 0) normalize pages & keep doc-level text ----------
 df["pages"] = df["pages"].apply(ensure_json)
+df["_doc_text"] = df["text"].fillna("").astype(str)   # keep original full-doc text
 
-# 1) Ensure we have a document-level text column
-if "text" not in df.columns:
-    df["text"] = df["pages"].apply(extract_text_from_pages)
-else:
-    # fill empties from pages if needed
-    mask = df["text"].isna() | (df["text"].astype(str).str.len() == 0)
-    df.loc[mask, "text"] = df.loc[mask, "pages"].apply(extract_text_from_pages)
+# ---------- 1) explode to one row per page ----------
+df["_page_index_tmp"] = df["pages"].apply(lambda p: list(range(len(p))))
+df_pages = df.explode(["pages", "_page_index_tmp"], ignore_index=True)
+df_pages = df_pages.rename(columns={"pages": "page", "_page_index_tmp": "page_index"})
 
-# 2) Keep a copy of all original columns order
-orig_cols = df.columns.tolist()
-
-# 3) Add page index list, then explode (keeps every other column)
-df["_page_index"] = df["pages"].apply(lambda p: list(range(len(p))))
-df_pages = df.explode(["pages", "_page_index"], ignore_index=True)
-
-# 4) Rename exploded columns & compute per-page text
-df_pages = df_pages.rename(columns={"pages": "page", "_page_index": "page_index"})
+# ---------- 2) create per-page text from JSON ----------
 df_pages["page_text"] = df_pages["page"].apply(extract_text_from_page)
 
-# 5) Reorder: all original columns first, then page fields
-#    If you don't want the big per-page JSON in the table, drop 'page' here.
-cols = orig_cols + ["page_index", "page_text", "page"]
-df_pages = df_pages[cols]
+# ---------- 3) keep all original columns + new ones ----------
+orig_cols = [c for c in df.columns if c not in ["pages", "_page_index_tmp"]]
+df_pages = df_pages[orig_cols + ["page_index", "page_text", "page"]]
 
-# 6) (Optional) sort by your id columns + page_index
-id_cols = [c for c in ["_doc_id", "uri", "subfolder"] if c in df_pages.columns]
-if id_cols:
-    df_pages = df_pages.sort_values(id_cols + ["page_index"]).reset_index(drop=True)
+# ---------- 4) (optional) verify page_text concatenation ≈ doc-level text ----------
+# Pick an id column you have; we'll autodetect a common one:
+id_col = next((c for c in ["_doc_id", "doc_id", "id", "uri"] if c in df_pages.columns), None)
 
-# Done: df_pages has ALL your original columns + page_index/page/page_text
+if id_col:
+    # concat per-page text back to doc-level
+    per_doc_joined = (
+        df_pages
+        .sort_values([id_col, "page_index"])
+        .groupby(id_col)["page_text"].apply(lambda s: "\n".join(s))
+        .rename("_joined_from_pages")
+    )
+    check = (
+        df_pages[[id_col, "_doc_text"]].drop_duplicates().set_index(id_col)
+        .join(per_doc_joined)
+        .assign(match=lambda x: normalize(x["_doc_text"]) == normalize(x["_joined_from_pages"]))
+    )
+    # You can inspect mismatches like this:
+    # display(check[~check["match"]].head())
+
+# ---------- 5) (optional) sort for readability ----------
+sort_keys = ([id_col] if id_col else []) + ["page_index"]
+df_pages = df_pages.sort_values(sort_keys).reset_index(drop=True)
+
+# Result: df_pages has one row per page, your original full-doc text in `_doc_text`,
+# and per-page text in `page_text` (plus the raw per-page JSON in `page`).
 df_pages.head(10)
