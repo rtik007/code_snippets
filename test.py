@@ -1,55 +1,57 @@
 import json
 import pandas as pd
 
-# ------------------------------------------------------
-# 1) Keep 'pages' as raw JSON (convert any string to dict/list)
-# ------------------------------------------------------
+# ---------- helpers ----------
 def ensure_json(val):
+    """Make sure 'pages' is a list[dict], not a JSON string."""
     if isinstance(val, str):
         try:
-            return json.loads(val)   # parse JSON string
+            return json.loads(val)
         except Exception:
-            return val               # keep raw string if not valid JSON
-    return val
+            return []
+    return val if isinstance(val, list) else []
 
-df["pages"] = df["pages"].apply(ensure_json)
-
-
-# ------------------------------------------------------
-# 2) Extract flattened human-readable text from 'pages'
-# ------------------------------------------------------
-def extract_text_from_pages(pages):
+def extract_text_from_page(page):
+    """Get plain text from a single page dict (joins all block texts)."""
     texts = []
-    try:
-        for page in pages if isinstance(pages, (list, tuple)) else []:
-            for block in page.get("blocks", []):
-                layout = block.get("layout", {})
-                t = layout.get("text", "")
-                if isinstance(t, str) and t:
-                    texts.append(t)
-    except Exception:
-        return ""
+    for block in page.get("blocks", []):
+        layout = block.get("layout", {})
+        t = layout.get("text", "")
+        if isinstance(t, str) and t:
+            texts.append(t)
     return "\n".join(texts)
 
+# ---------- 1) ensure pages are JSON lists ----------
+df["pages"] = df["pages"].apply(ensure_json)
 
-# ------------------------------------------------------
-# 3) Store both 'pages' (raw JSON) and 'text' (flattened)
-# ------------------------------------------------------
-df["text"] = df["pages"].apply(extract_text_from_pages)
+# ---------- 2) build page index list so explode keeps order ----------
+df["_page_idx_list"] = df["pages"].apply(lambda p: list(range(len(p))))
+
+# ---------- 3) explode to one row per page ----------
+df_pages = df.explode(["pages", "_page_idx_list"], ignore_index=True)
+df_pages.rename(columns={"pages": "page", "_page_idx_list": "page_index"}, inplace=True)
+
+# Drop rows where there was no page
+df_pages = df_pages[df_pages["page"].notna()]
+
+# ---------- 4) per-page text ----------
+df_pages["page_text"] = df_pages["page"].apply(extract_text_from_page)
+
+# ---------- 5) pick the columns you want to keep ----------
+# adjust '_doc_id' to your actual id column name if different
+keep_cols = [c for c in ["_doc_id", "uri", "subfolder"] if c in df_pages.columns]
+df_pages = df_pages[keep_cols + ["page_index", "page_text", "page"]]
+
+# ---------- 6) sorting & quick look ----------
+df_pages = df_pages.sort_values(keep_cols + ["page_index"]).reset_index(drop=True)
+
+# Preview
+df_pages.head(10)
 
 
-# ------------------------------------------------------
-# 4) Verify by showing both in the same DataFrame
-# ------------------------------------------------------
-# Compact preview of JSON for table display
-def compact_json(val, max_len=200):
-    try:
-        s = json.dumps(val, ensure_ascii=False, separators=(",", ":"))
-    except Exception:
-        s = str(val)
-    return (s[:max_len] + "…") if len(s) > max_len else s
-
-df["pages_preview"] = df["pages"].apply(compact_json)
-
-# Show sample
-df[["pages_preview", "text"]].head()
+# Replace '_doc_id' with your id column if needed
+for doc_id, g in df_pages.groupby("_doc_id"):
+    print(f"\n=== Document {doc_id} ===")
+    for _, r in g.sort_values("page_index").iterrows():
+        print(f"\n--- Page {r.page_index} ---")
+        print(r.page_text)
