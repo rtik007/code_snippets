@@ -1,25 +1,16 @@
-As we continue scaling GenAI development, several challenges are slowing down progress and limiting effectiveness. Below is a consolidated view of the top priorities requiring leadership focus:
+Provisioning Delays → Accelerate Provisioning
+Current project setup takes weeks due to Munas/EDL processes. We recommend defining SLA-driven workflows to reduce setup timelines to days.
 
-Key Challenges
+Inconsistent Practices → Codify Best Practices
+Lack of standardized guidance for local vs. cloud development creates inefficiencies. Publishing clear development guidelines will ensure consistency and speed.
 
-Provisioning Delays – New project setup often takes weeks due to complex Munas/EDL processes and approvals. This impacts agility and speed to execution.
+Gaps in Testing → Strengthen Evaluation
+Limited access to fairness, robustness, and compliance testing frameworks reduces model readiness. Expanding access will improve quality and trust in deployment.
 
-Lack of Standardized Best Practices – Inconsistent guidance for local vs. cloud development creates inefficiencies and confusion across teams.
+Fragmented Governance → Enhance Accountability
+Unclear ownership and disconnected processes slow decisions and duplicate effort. A defined governance model and roadmap will bring transparency and oversight.
 
-Limited Evaluation & Testing Capabilities – Gaps in tools and frameworks for fairness, robustness, and compliance testing reduce confidence in production readiness.
+Communication Gaps → Improve Alignment
+No regular cadence exists to align on platform updates and priorities. Quarterly communications will provide visibility and enable proactive planning.
 
-Governance & Transparency – Fragmented processes and unclear ownership limit visibility, slow decision-making, and create duplication of effort.
-
-Communication Gaps – No regular cadence to align on platform enhancements, priorities, and upcoming changes.
-
-Recommended Priorities
-
-Accelerate Provisioning: Define SLA-driven processes to reduce project setup time from weeks to days.
-
-Codify Best Practices: Publish standardized guidance for development workflows to ensure consistency and efficiency.
-
-Strengthen Evaluation: Broaden access to model testing frameworks to improve quality, security, and compliance.
-
-Enhance Governance: Establish clearer accountability and a roadmap that balances flexibility with oversight.
-
-Improve Alignment: Introduce quarterly communications to share updates and enable proactive planning.
+By aligning on these focus areas, we can significantly improve agility, transparency, and confidence in our GenAI initiatives while enabling teams to deliver at scale.
